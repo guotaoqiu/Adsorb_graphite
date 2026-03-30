@@ -480,25 +480,22 @@ def process_slab(slab_path, adsorbate_type, height=2.0, chain_length=3,
         print("  No configurations generated!")
         return []
 
-    # Check if supercell was used - write clean supercell slab too
+    # Record supercell info so calc_adsorption_energy.py can scale E(slab) properly
     _, _, _, sc_info = configs[0]
     sc_na, sc_nb = map(int, sc_info.split('x'))
     if sc_na > 1 or sc_nb > 1:
-        supercell_slab = make_supercell_slab(
-            read(slab_path, format='vasp'), sc_na, sc_nb
-        )
-        clean_dir = os.path.join(parent_dir, f"clean_slab_{sc_na}x{sc_nb}")
-        Path(clean_dir).mkdir(parents=True, exist_ok=True)
-
-        n_sc = len(supercell_slab)
-        flags_clean = apply_selective_dynamics(supercell_slab, n_sc, relax_fraction)
-        write_poscar_selective(supercell_slab, flags_clean,
-                               os.path.join(clean_dir, 'POSCAR'))
-        if incar_template and os.path.exists(incar_template):
-            import shutil
-            shutil.copy2(incar_template, os.path.join(clean_dir, 'INCAR'))
-        print(f"  Clean supercell slab: {clean_dir} ({n_sc} atoms)")
-        print(f"  ** Use this clean slab energy for E_ads comparison **")
+        import json
+        sc_meta = {
+            'supercell': [sc_na, sc_nb, 1],
+            'scale_factor': sc_na * sc_nb,
+            'note': 'E(supercell slab) = scale_factor * E(1x1 slab). '
+                    'No separate supercell slab calculation needed.',
+        }
+        meta_path = os.path.join(parent_dir, f'supercell_{sc_na}x{sc_nb}_info.json')
+        with open(meta_path, 'w') as f:
+            json.dump(sc_meta, f, indent=2)
+        print(f"  Supercell info saved: {meta_path}")
+        print(f"  E_ads = E(slab+ads) - {sc_na*sc_nb} * E(1x1 slab) - n_C * E_C_ref")
 
     results = []
     for combined, config_name, n_slab, sc_info in configs:

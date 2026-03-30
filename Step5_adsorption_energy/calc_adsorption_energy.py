@@ -113,22 +113,46 @@ def get_surface_area(calc_dir):
     raise FileNotFoundError(f"No POSCAR/CONTCAR in {calc_dir}")
 
 
-def count_adsorbate_C(ads_dir, slab_species, slab_counts):
+def detect_supercell_factor(ads_dir):
+    """
+    Detect supercell scale factor from config name or supercell_info.json.
+
+    If ads directory is named like 'ads_C_2x3_ontop_0', extracts 2*3=6.
+    Also checks for supercell_*_info.json in parent directory.
+    Returns scale factor (int, default 1).
+    """
+    # Check parent dir for supercell_info.json
+    parent = os.path.dirname(os.path.abspath(ads_dir))
+    for f in glob.glob(os.path.join(parent, 'supercell_*_info.json')):
+        with open(f) as fh:
+            info = json.load(fh)
+        return info.get('scale_factor', 1)
+
+    # Try to parse from directory name: ads_C_2x3_ontop_0
+    dirname = os.path.basename(ads_dir)
+    match = re.search(r'_(\d+)x(\d+)_', dirname)
+    if match:
+        return int(match.group(1)) * int(match.group(2))
+
+    return 1
+
+
+def count_adsorbate_C(ads_dir, slab_species, slab_counts, supercell_factor=1):
     """
     Determine how many C atoms are adsorbate atoms by comparing
-    with the clean slab composition.
+    with the clean slab composition (scaled by supercell_factor).
     """
     ads_species, ads_counts = get_natoms_and_species(ads_dir)
 
+    # Scale slab composition by supercell factor
     slab_composition = {}
     for sp, cnt in zip(slab_species, slab_counts):
-        slab_composition[sp] = slab_composition.get(sp, 0) + cnt
+        slab_composition[sp] = slab_composition.get(sp, 0) + cnt * supercell_factor
 
     ads_composition = {}
     for sp, cnt in zip(ads_species, ads_counts):
         ads_composition[sp] = ads_composition.get(sp, 0) + cnt
 
-    # The difference in C count is the number of adsorbate C atoms
     n_C_ads = ads_composition.get('C', 0) - slab_composition.get('C', 0)
     return max(n_C_ads, 0)
 
@@ -247,9 +271,9 @@ def main():
     # Get slab composition for adsorbate counting
     slab_species, slab_counts = get_natoms_and_species(args.slab_dir)
 
-    print(f"Clean slab energy: {e_slab:.6f} eV")
+    print(f"Clean 1x1 slab energy: {e_slab:.6f} eV")
     print(f"C reference energy: {args.c_energy:.6f} eV/atom")
-    print(f"Slab composition: {dict(zip(slab_species, slab_counts))}")
+    print(f"Slab composition (1x1): {dict(zip(slab_species, slab_counts))}")
     if args.zpe:
         print(f"ZPE correction: ENABLED")
         print(f"  ZPE(slab) = {args.zpe_slab:.6f} eV")
@@ -275,7 +299,13 @@ def main():
         for ads_dir in ads_dirs:
             try:
                 e_ads_slab = get_energy(ads_dir)
-                n_C_ads = count_adsorbate_C(ads_dir, slab_species, slab_counts)
+
+                # Auto-detect supercell factor -> scale slab energy
+                sc_factor = detect_supercell_factor(ads_dir)
+                e_slab_scaled = e_slab * sc_factor
+
+                n_C_ads = count_adsorbate_C(ads_dir, slab_species, slab_counts,
+                                             supercell_factor=sc_factor)
                 area = get_surface_area(ads_dir) if args.per_area else None
 
                 # ZPE handling
@@ -288,7 +318,7 @@ def main():
                         print(f"  {ads_dir:<40}  WARNING: no ZPE data, using E without ZPE")
 
                 e_ads = calc_adsorption_energy(
-                    e_ads_slab, e_slab, n_C_ads, args.c_energy,
+                    e_ads_slab, e_slab_scaled, n_C_ads, args.c_energy,
                     area, args.per_area,
                     zpe_ads=zpe_ads, zpe_slab=args.zpe_slab, zpe_ref=args.zpe_ref
                 )
@@ -300,7 +330,10 @@ def main():
                     'e_adsorption': e_ads,
                     'unit': 'eV/Ang^2' if args.per_area else 'eV',
                     'zpe_corrected': zpe_ads is not None,
+                    'supercell_factor': sc_factor,
                 }
+                if sc_factor > 1:
+                    result['e_slab_scaled'] = e_slab_scaled
                 if zpe_ads is not None:
                     result['zpe_ads_eV'] = zpe_ads
                     result['zpe_correction_eV'] = zpe_ads - args.zpe_slab - args.zpe_ref
@@ -313,7 +346,8 @@ def main():
                 unit = 'eV/Ang^2' if args.per_area else 'eV'
                 zpe_str = f"  ZPE={zpe_ads:.4f}" if zpe_ads is not None else ""
                 imag_str = f"  [{n_imag} imag!]" if n_imag > 0 else ""
-                print(f"  {ads_dir:<40}  n_C={n_C_ads:>3}  E_ads={e_ads:>10.4f} {unit}{zpe_str}{imag_str}")
+                sc_str = f"  [{sc_factor}x slab]" if sc_factor > 1 else ""
+                print(f"  {ads_dir:<40}  n_C={n_C_ads:>3}  E_ads={e_ads:>10.4f} {unit}{sc_str}{zpe_str}{imag_str}")
 
             except Exception as e:
                 print(f"  {ads_dir:<40}  ERROR: {e}")
@@ -338,7 +372,10 @@ def main():
 
     elif args.ads_dir:
         e_ads_slab = get_energy(args.ads_dir)
-        n_C_ads = count_adsorbate_C(args.ads_dir, slab_species, slab_counts)
+        sc_factor = detect_supercell_factor(args.ads_dir)
+        e_slab_scaled = e_slab * sc_factor
+        n_C_ads = count_adsorbate_C(args.ads_dir, slab_species, slab_counts,
+                                     supercell_factor=sc_factor)
         area = get_surface_area(args.ads_dir) if args.per_area else None
 
         zpe_ads = None
@@ -348,12 +385,14 @@ def main():
             zpe_ads, n_imag = get_zpe(args.ads_dir, args.freq_subdir, args.zpe_json)
 
         e_ads = calc_adsorption_energy(
-            e_ads_slab, e_slab, n_C_ads, args.c_energy,
+            e_ads_slab, e_slab_scaled, n_C_ads, args.c_energy,
             area, args.per_area,
             zpe_ads=zpe_ads, zpe_slab=args.zpe_slab, zpe_ref=args.zpe_ref
         )
 
         print(f"\nDirectory: {args.ads_dir}")
+        if sc_factor > 1:
+            print(f"Supercell factor: {sc_factor}x (E_slab = {sc_factor} * {e_slab:.6f} = {e_slab_scaled:.6f} eV)")
         print(f"E(slab+ads) = {e_ads_slab:.6f} eV")
         print(f"N_C (adsorbate) = {n_C_ads}")
         if zpe_ads is not None:
