@@ -4,18 +4,20 @@ Calculate surface energy from VASP slab calculations.
 
 Surface energy: gamma = (E_slab - N * E_bulk_per_atom) / (2 * A)
 
+The bulk atom count is auto-detected from CONTCAR/POSCAR in the bulk directory.
+
 Usage:
+    # Using bulk directory (auto-reads energy + natoms)
+    python3 calc_surface_energy.py --batch --bulk_dir /path/to/bulk/
+
+    # Using bulk OUTCAR (natoms auto-read from CONTCAR/POSCAR in same dir)
+    python3 calc_surface_energy.py --batch --bulk_outcar /path/to/bulk/OUTCAR
+
     # Single surface
-    python3 calc_surface_energy.py --slab_dir surf_001_term_0 --bulk_energy -123.456 --bulk_natoms 8
+    python3 calc_surface_energy.py --slab_dir surf_001_term_0 --bulk_dir /path/to/bulk/
 
-    # Batch mode: process all surf_* directories
+    # Override if needed (e.g. bulk POSCAR not available)
     python3 calc_surface_energy.py --batch --bulk_energy -123.456 --bulk_natoms 8
-
-    # Using bulk OUTCAR directly
-    python3 calc_surface_energy.py --batch --bulk_outcar /path/to/bulk/OUTCAR --bulk_natoms 8
-
-    # With convergence test (multiple thicknesses)
-    python3 calc_surface_energy.py --convergence --bulk_energy -123.456 --bulk_natoms 8
 """
 
 import os
@@ -153,29 +155,53 @@ def main():
     parser.add_argument('--slab_dir', default=None, help="Single slab directory")
     parser.add_argument('--batch', action='store_true', help="Process all surf_* directories")
     parser.add_argument('--pattern', default='surf_*', help="Glob pattern for batch mode (default: surf_*)")
-    parser.add_argument('--bulk_energy', type=float, default=None, help="Total bulk energy (eV)")
-    parser.add_argument('--bulk_natoms', type=int, default=None, help="Number of atoms in bulk cell")
-    parser.add_argument('--bulk_outcar', default=None, help="Path to bulk OUTCAR (alternative to --bulk_energy)")
+    parser.add_argument('--bulk_dir', default=None,
+                        help="Bulk calculation directory (auto-reads energy from OUTCAR "
+                             "and natoms from CONTCAR/POSCAR)")
+    parser.add_argument('--bulk_outcar', default=None,
+                        help="Path to bulk OUTCAR (natoms auto-read from CONTCAR/POSCAR in same dir)")
+    parser.add_argument('--bulk_energy', type=float, default=None,
+                        help="Total bulk energy in eV (manual override)")
+    parser.add_argument('--bulk_natoms', type=int, default=None,
+                        help="Number of atoms in bulk cell (manual override, "
+                             "auto-detected from bulk CONTCAR/POSCAR if not given)")
     parser.add_argument('--output', default='surface_energies.json', help="Output JSON file")
     parser.add_argument('--convergence', action='store_true',
                         help="Convergence test mode: expect subdirs with different thicknesses")
 
     args = parser.parse_args()
 
-    # Get bulk energy per atom
-    if args.bulk_outcar:
+    # Resolve bulk energy and natoms
+    e_bulk_total = None
+    bulk_natoms = args.bulk_natoms
+
+    if args.bulk_dir:
+        # --bulk_dir: read both energy and natoms from the directory
+        e_bulk_total = get_energy(args.bulk_dir)
+        if bulk_natoms is None:
+            bulk_natoms = get_slab_natoms(args.bulk_dir)  # works for bulk too
+        print(f"Bulk dir: {args.bulk_dir}")
+
+    elif args.bulk_outcar:
+        # --bulk_outcar: read energy, auto-detect natoms from same directory
         e_bulk_total = parse_outcar_energy(args.bulk_outcar)
-        if args.bulk_natoms is None:
-            raise ValueError("--bulk_natoms is required when using --bulk_outcar")
-        e_bulk_per_atom = e_bulk_total / args.bulk_natoms
-        print(f"Bulk energy from OUTCAR: {e_bulk_total:.6f} eV / {args.bulk_natoms} atoms = {e_bulk_per_atom:.6f} eV/atom")
+        if bulk_natoms is None:
+            bulk_dir = os.path.dirname(args.bulk_outcar)
+            bulk_natoms = get_slab_natoms(bulk_dir)
+        print(f"Bulk OUTCAR: {args.bulk_outcar}")
+
     elif args.bulk_energy is not None:
-        if args.bulk_natoms is None:
-            raise ValueError("--bulk_natoms is required when using --bulk_energy")
-        e_bulk_per_atom = args.bulk_energy / args.bulk_natoms
-        print(f"Bulk energy: {args.bulk_energy:.6f} eV / {args.bulk_natoms} atoms = {e_bulk_per_atom:.6f} eV/atom")
+        # --bulk_energy: manual energy, still need natoms
+        e_bulk_total = args.bulk_energy
+        if bulk_natoms is None:
+            parser.error("--bulk_natoms is required when using --bulk_energy "
+                         "(no structure file to auto-detect from)")
+
     else:
-        parser.error("Either --bulk_energy or --bulk_outcar must be provided")
+        parser.error("Provide bulk reference via --bulk_dir, --bulk_outcar, or --bulk_energy")
+
+    e_bulk_per_atom = e_bulk_total / bulk_natoms
+    print(f"Bulk energy: {e_bulk_total:.6f} eV / {bulk_natoms} atoms = {e_bulk_per_atom:.6f} eV/atom")
 
     results = []
 
