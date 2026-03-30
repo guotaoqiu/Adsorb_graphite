@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-Calculate adsorption energy from VASP outputs.
+Calculate adsorption energy from VASP outputs, with optional ZPE correction.
 
-E_ads = E(slab+adsorbate) - E(clean_slab) - E(adsorbate_gas)
+Without ZPE:
+  E_ads = E(slab+adsorbate) - E(clean_slab) - n_C * E_C_ref
+
+With ZPE correction:
+  E_ads = [E(slab+ads) + ZPE(slab+ads)] - [E(slab) + ZPE(slab)] - [n_C * E_C_ref + ZPE(C_ref)]
+  Note: For slab, ZPE(slab) is often negligible and can be set to 0.
 
 For carbon species:
-  - Single C: E_ads = E(slab+C) - E(slab) - E(C_gas)
-  - C_n chain/ring: E_ads = E(slab+C_n) - E(slab) - n * E(C_gas)
-    or alternatively:  E_ads = E(slab+C_n) - E(slab) - E(C_n_gas)
-  - Graphene: E_ads = [E(slab+graphene) - E(slab) - E(graphene_freestanding)] / Area
+  - Single C: E_ads = E(slab+C) - E(slab) - E(C_gas)  (C atom has no ZPE)
+  - C_n chain/ring: includes ZPE from frequency calc
+  - Graphene: E_ads = [E(slab+graphene) - E(slab) - E(graphene)] / Area  (no ZPE needed)
 
 Usage:
-    # Single configuration
-    python3 calc_adsorption_energy.py --ads_dir ads_C_ontop_0 --slab_energy -200.0 --c_energy -1.36
-
-    # Batch: all ads_* directories under a surface
+    # Without ZPE (basic)
     python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36
 
-    # Using OUTCAR paths directly
-    python3 calc_adsorption_energy.py --batch --slab_outcar surf_001/OUTCAR --c_energy -1.36
+    # With ZPE correction (expects freq/OUTCAR in each ads_* directory)
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 --zpe
 
-    # Graphene mode (per-area normalization)
+    # With ZPE + reference ZPE for gas-phase adsorbate
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 \
+        --zpe --zpe_ref 0.05 --zpe_slab 0.0
+
+    # With ZPE from pre-computed JSON (from parse_frequency.py)
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 \
+        --zpe --zpe_json zpe_results.json
+
+    # Graphene mode (per-area, no ZPE)
     python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 --per_area
 """
 
@@ -119,15 +128,74 @@ def count_adsorbate_C(ads_dir, slab_species, slab_counts):
     return max(n_C_ads, 0)
 
 
-def calc_adsorption_energy(e_ads_slab, e_clean_slab, n_C_adsorbate, e_C_ref,
-                            area=None, per_area=False):
+def parse_zpe_from_freq_outcar(outcar_path):
     """
-    E_ads = E(slab+adsorbate) - E(clean_slab) - n_C * E_C_ref
+    Parse vibrational frequencies from a frequency-calc OUTCAR and compute ZPE.
+    ZPE = 0.5 * sum(real_freq_i)  in meV, converted to eV.
+    """
+    real_freqs_mev = []
+    n_imag = 0
+    with open(outcar_path, 'r') as f:
+        for line in f:
+            match_real = re.match(
+                r'\s*\d+\s+f\s+=\s+[\d.]+\s+THz\s+[\d.]+\s+2PiTHz\s+'
+                r'[\d.]+\s+cm-1\s+([\d.]+)\s+meV', line)
+            if match_real:
+                real_freqs_mev.append(float(match_real.group(1)))
+                continue
+            match_imag = re.match(r'\s*\d+\s+f/i\s*=', line)
+            if match_imag:
+                n_imag += 1
 
-    If per_area: normalize by surface area (for graphene-like coverage).
+    if not real_freqs_mev and n_imag == 0:
+        return None, 0  # No frequency data found
+
+    zpe_ev = 0.5 * sum(real_freqs_mev) / 1000.0
+    return zpe_ev, n_imag
+
+
+def get_zpe(ads_dir, freq_subdir='freq', zpe_json=None):
+    """
+    Get ZPE for an adsorption directory.
+
+    Priority:
+    1. From zpe_json (pre-computed by parse_frequency.py)
+    2. From freq/OUTCAR in the ads directory
+    """
+    # Try JSON first
+    if zpe_json and os.path.exists(zpe_json):
+        with open(zpe_json) as f:
+            zpe_data = json.load(f)
+        for entry in zpe_data:
+            # Match by parent directory
+            outcar_parent = os.path.dirname(os.path.dirname(entry.get('outcar', '')))
+            if os.path.abspath(outcar_parent) == os.path.abspath(ads_dir):
+                return entry['zpe_eV'], entry.get('n_imaginary', 0)
+
+    # Try freq/OUTCAR
+    freq_outcar = os.path.join(ads_dir, freq_subdir, 'OUTCAR')
+    if os.path.exists(freq_outcar):
+        return parse_zpe_from_freq_outcar(freq_outcar)
+
+    return None, 0
+
+
+def calc_adsorption_energy(e_ads_slab, e_clean_slab, n_C_adsorbate, e_C_ref,
+                            area=None, per_area=False,
+                            zpe_ads=None, zpe_slab=0.0, zpe_ref=0.0):
+    """
+    E_ads = [E(slab+ads) + ZPE(slab+ads)] - [E(slab) + ZPE(slab)]
+            - [n_C * E_C_ref + ZPE(ref)]
+
+    ZPE terms default to 0 if not provided (no correction).
+    If per_area: normalize by surface area (for graphene).
     Returns eV (or eV/Ang^2 if per_area).
     """
-    e_ads = e_ads_slab - e_clean_slab - n_C_adsorbate * e_C_ref
+    zpe_correction = 0.0
+    if zpe_ads is not None:
+        zpe_correction = zpe_ads - zpe_slab - zpe_ref
+
+    e_ads = (e_ads_slab - e_clean_slab - n_C_adsorbate * e_C_ref) + zpe_correction
 
     if per_area and area:
         return e_ads / area
@@ -147,6 +215,17 @@ def main():
                              "Typically from isolated C atom or graphite per atom.")
     parser.add_argument('--per_area', action='store_true',
                         help="Normalize by surface area (for graphene adsorption)")
+    parser.add_argument('--zpe', action='store_true',
+                        help="Include ZPE correction from frequency calculations")
+    parser.add_argument('--zpe_json', default=None,
+                        help="Pre-computed ZPE JSON file (from parse_frequency.py)")
+    parser.add_argument('--freq_subdir', default='freq',
+                        help="Subdirectory name for frequency calc (default: freq)")
+    parser.add_argument('--zpe_slab', type=float, default=0.0,
+                        help="ZPE of clean slab in eV (default: 0.0, usually negligible)")
+    parser.add_argument('--zpe_ref', type=float, default=0.0,
+                        help="ZPE of gas-phase reference per adsorbate in eV "
+                             "(default: 0.0; single C atom has no ZPE)")
     parser.add_argument('--output', default='adsorption_energies.json', help="Output JSON file")
 
     args = parser.parse_args()
@@ -166,6 +245,14 @@ def main():
     print(f"Clean slab energy: {e_slab:.6f} eV")
     print(f"C reference energy: {args.c_energy:.6f} eV/atom")
     print(f"Slab composition: {dict(zip(slab_species, slab_counts))}")
+    if args.zpe:
+        print(f"ZPE correction: ENABLED")
+        print(f"  ZPE(slab) = {args.zpe_slab:.6f} eV")
+        print(f"  ZPE(ref)  = {args.zpe_ref:.6f} eV")
+        if args.zpe_json:
+            print(f"  ZPE source: {args.zpe_json}")
+        else:
+            print(f"  ZPE source: {args.freq_subdir}/OUTCAR in each ads directory")
 
     results = []
 
@@ -186,8 +273,20 @@ def main():
                 n_C_ads = count_adsorbate_C(ads_dir, slab_species, slab_counts)
                 area = get_surface_area(ads_dir) if args.per_area else None
 
-                e_ads = calc_adsorption_energy(e_ads_slab, e_slab, n_C_ads,
-                                                args.c_energy, area, args.per_area)
+                # ZPE handling
+                zpe_ads = None
+                n_imag = 0
+                is_graphene = 'graphene' in os.path.basename(ads_dir)
+                if args.zpe and not is_graphene:
+                    zpe_ads, n_imag = get_zpe(ads_dir, args.freq_subdir, args.zpe_json)
+                    if zpe_ads is None:
+                        print(f"  {ads_dir:<40}  WARNING: no ZPE data, using E without ZPE")
+
+                e_ads = calc_adsorption_energy(
+                    e_ads_slab, e_slab, n_C_ads, args.c_energy,
+                    area, args.per_area,
+                    zpe_ads=zpe_ads, zpe_slab=args.zpe_slab, zpe_ref=args.zpe_ref
+                )
 
                 result = {
                     'directory': ads_dir,
@@ -195,14 +294,21 @@ def main():
                     'n_C_adsorbate': n_C_ads,
                     'e_adsorption': e_ads,
                     'unit': 'eV/Ang^2' if args.per_area else 'eV',
+                    'zpe_corrected': zpe_ads is not None,
                 }
+                if zpe_ads is not None:
+                    result['zpe_ads_eV'] = zpe_ads
+                    result['zpe_correction_eV'] = zpe_ads - args.zpe_slab - args.zpe_ref
+                    result['n_imaginary_freq'] = n_imag
                 if args.per_area:
                     result['area'] = area
                     result['e_ads_per_area_J_m2'] = e_ads * 16.0217663
 
                 results.append(result)
                 unit = 'eV/Ang^2' if args.per_area else 'eV'
-                print(f"  {ads_dir:<40}  n_C={n_C_ads:>3}  E_ads={e_ads:>10.4f} {unit}")
+                zpe_str = f"  ZPE={zpe_ads:.4f}" if zpe_ads is not None else ""
+                imag_str = f"  [{n_imag} imag!]" if n_imag > 0 else ""
+                print(f"  {ads_dir:<40}  n_C={n_C_ads:>3}  E_ads={e_ads:>10.4f} {unit}{zpe_str}{imag_str}")
 
             except Exception as e:
                 print(f"  {ads_dir:<40}  ERROR: {e}")
@@ -230,22 +336,41 @@ def main():
         n_C_ads = count_adsorbate_C(args.ads_dir, slab_species, slab_counts)
         area = get_surface_area(args.ads_dir) if args.per_area else None
 
-        e_ads = calc_adsorption_energy(e_ads_slab, e_slab, n_C_ads,
-                                        args.c_energy, area, args.per_area)
+        zpe_ads = None
+        n_imag = 0
+        is_graphene = 'graphene' in os.path.basename(args.ads_dir)
+        if args.zpe and not is_graphene:
+            zpe_ads, n_imag = get_zpe(args.ads_dir, args.freq_subdir, args.zpe_json)
+
+        e_ads = calc_adsorption_energy(
+            e_ads_slab, e_slab, n_C_ads, args.c_energy,
+            area, args.per_area,
+            zpe_ads=zpe_ads, zpe_slab=args.zpe_slab, zpe_ref=args.zpe_ref
+        )
 
         print(f"\nDirectory: {args.ads_dir}")
         print(f"E(slab+ads) = {e_ads_slab:.6f} eV")
         print(f"N_C (adsorbate) = {n_C_ads}")
+        if zpe_ads is not None:
+            zpe_corr = zpe_ads - args.zpe_slab - args.zpe_ref
+            print(f"ZPE(ads) = {zpe_ads:.6f} eV, ZPE correction = {zpe_corr:.6f} eV")
+            if n_imag > 0:
+                print(f"WARNING: {n_imag} imaginary frequency(ies) found!")
         unit = 'eV/Ang^2' if args.per_area else 'eV'
         print(f"E_adsorption = {e_ads:.6f} {unit}")
 
-        results.append({
+        result = {
             'directory': args.ads_dir,
             'e_ads_slab': e_ads_slab,
             'n_C_adsorbate': n_C_ads,
             'e_adsorption': e_ads,
             'unit': unit,
-        })
+            'zpe_corrected': zpe_ads is not None,
+        }
+        if zpe_ads is not None:
+            result['zpe_ads_eV'] = zpe_ads
+            result['zpe_correction_eV'] = zpe_ads - args.zpe_slab - args.zpe_ref
+        results.append(result)
     else:
         parser.error("Either --ads_dir or --batch must be specified")
 

@@ -1,0 +1,33 @@
+# INCAR for frequency calculation (finite differences)
+# Use with selective dynamics: only adsorbate atoms set to T T T
+# Slab atoms should be fixed (F F F)
+
+ALGO = Normal
+EDIFF = 1e-07
+ENAUG = 1360
+ENCUT = 680
+IBRION = 5
+ISIF = 0
+ISMEAR = 0
+ISPIN = 2
+KPAR = 4
+KSPACING = 0.15
+LASPH = True
+LCHARG = False
+LELF = False
+LMAXMIX = 6
+LMIXTAU = True
+LORBIT = 11
+LREAL = False
+LWAVE = False
+NCORE = 16
+NEDOS = 2000
+NELM = 200
+NELMIN = 5
+NFREE = 2
+NSW = 1
+POTIM = 0.015
+PREC = Accurate
+SIGMA = 0.05
+LDIPOL = True
+IDIPOL = 3
