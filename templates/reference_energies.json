@@ -1,0 +1,20 @@
+{
+    "graphite": {
+        "structure": "AB stacking, P6_3/mmc",
+        "n_atoms": 4,
+        "e_total_eV": -39.78722576,
+        "e_per_atom_eV": -9.9468064400,
+        "lattice": {
+            "a": 2.4665,
+            "c": 7.3438,
+            "unit": "Angstrom"
+        },
+        "source": "Own VASP calculation (PBE, same POTCAR/ENCUT as workflow)",
+        "note": "Use this as --c_energy for adsorption energy calculations"
+    },
+    "materials_project_C": {
+        "e_per_atom_eV": -9.2286654925,
+        "source": "Materials Project",
+        "note": "Do NOT mix with own calculation values - different POTCAR/settings"
+    }
+}

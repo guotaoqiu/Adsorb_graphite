@@ -14,23 +14,28 @@ For carbon species:
   - C_n chain/ring: includes ZPE from frequency calc
   - Graphene: E_ads = [E(slab+graphene) - E(slab) - E(graphene)] / Area  (no ZPE needed)
 
+C reference energy (--c_energy):
+  Use YOUR OWN graphite calculation for consistency with your POTCAR/INCAR.
+  Example: graphite E_total = -39.787 eV / 4 atoms => --c_energy -9.9468
+  Do NOT mix with Materials Project values unless using the same settings.
+
 Usage:
-    # Without ZPE (basic)
-    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36
+    # Without ZPE (basic), using graphite per-atom energy as C reference
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -9.9468
 
     # With ZPE correction (expects freq/OUTCAR in each ads_* directory)
-    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 --zpe
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -9.9468 --zpe
 
     # With ZPE + reference ZPE for gas-phase adsorbate
-    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 \
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -9.9468 \
         --zpe --zpe_ref 0.05 --zpe_slab 0.0
 
     # With ZPE from pre-computed JSON (from parse_frequency.py)
-    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 \
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -9.9468 \
         --zpe --zpe_json zpe_results.json
 
     # Graphene mode (per-area, no ZPE)
-    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -1.36 --per_area
+    python3 calc_adsorption_energy.py --batch --slab_energy -200.0 --c_energy -9.9468 --per_area
 """
 
 import os
@@ -211,8 +216,8 @@ def main():
     parser.add_argument('--slab_outcar', default=None, help="Path to clean slab OUTCAR")
     parser.add_argument('--slab_dir', default='.', help="Clean slab directory (for species comparison)")
     parser.add_argument('--c_energy', type=float, required=True,
-                        help="Reference energy per C atom (eV). "
-                             "Typically from isolated C atom or graphite per atom.")
+                        help="Reference energy per C atom (eV) from YOUR OWN graphite calc. "
+                             "E.g. graphite -39.787 eV / 4 atoms = -9.9468 eV/atom.")
     parser.add_argument('--per_area', action='store_true',
                         help="Normalize by surface area (for graphene adsorption)")
     parser.add_argument('--zpe', action='store_true',
