@@ -30,14 +30,11 @@ Usage:
 import os
 import argparse
 import glob
-import itertools
 import numpy as np
 from pathlib import Path
 
 from ase.io import read, write
 from ase import Atoms
-from ase.build import add_adsorbate, molecule
-from ase.build.surface import surface
 
 
 def find_adsorption_sites(slab, symm_reduce=0.01):
