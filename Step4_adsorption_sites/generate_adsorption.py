@@ -99,13 +99,15 @@ def make_supercell_slab(slab_ase, na, nb):
 
 # ─── Selective dynamics ───
 
-def apply_selective_dynamics(combined, n_slab_atoms, relax_fraction=0.25):
+def apply_selective_dynamics(combined, n_slab_atoms, relax_fraction=0.25,
+                             both_sides=False):
     """
     Apply selective dynamics to a slab+adsorbate structure.
 
     Strategy:
     - All adsorbate atoms (indices >= n_slab_atoms): T T T (relaxed)
     - Top relax_fraction of slab atoms (by z-coordinate): T T T
+    - If both_sides: also relax bottom relax_fraction
     - Rest of slab atoms: F F F (fixed)
 
     Returns list of flags ['T T T' or 'F F F'] for each atom.
@@ -119,7 +121,9 @@ def apply_selective_dynamics(combined, n_slab_atoms, relax_fraction=0.25):
     slab_thickness = z_max - z_min
 
     # Top relax_fraction of the slab
-    z_cutoff = z_max - relax_fraction * slab_thickness
+    z_top_cutoff = z_max - relax_fraction * slab_thickness
+    # Bottom cutoff (only used for both_sides)
+    z_bot_cutoff = z_min + relax_fraction * slab_thickness
 
     flags = []
     n_relaxed_slab = 0
@@ -128,8 +132,12 @@ def apply_selective_dynamics(combined, n_slab_atoms, relax_fraction=0.25):
         if i >= n_slab_atoms:
             # Adsorbate atom - always relax
             flags.append('T T T')
-        elif positions[i, 2] >= z_cutoff:
+        elif positions[i, 2] >= z_top_cutoff:
             # Top part of slab - relax
+            flags.append('T T T')
+            n_relaxed_slab += 1
+        elif both_sides and positions[i, 2] <= z_bot_cutoff:
+            # Bottom part of slab - relax (asymmetric slab)
             flags.append('T T T')
             n_relaxed_slab += 1
         else:
@@ -207,6 +215,51 @@ def find_adsorption_sites(slab_path, height=2.0, symm_reduce=0.01,
 
     total = sum(len(v) for v in sites.values())
     print(f"  Unique adsorption sites: {total} "
+          f"(ontop={len(sites['ontop'])}, bridge={len(sites['bridge'])}, "
+          f"hollow={len(sites['hollow'])})")
+
+    return sites
+
+
+def find_bottom_adsorption_sites(slab_path, height=2.0, symm_reduce=0.01,
+                                  near_reduce=0.5, no_obtuse_hollow=True):
+    """
+    Find adsorption sites on the BOTTOM surface of an asymmetric slab.
+
+    Strategy: flip the slab (invert z), find sites on the new "top",
+    then flip the site coordinates back.
+    """
+    from pymatgen.core import Structure as PmgStructure
+    slab_pmg = PmgStructure.from_file(slab_path)
+
+    # Flip: z -> 1-z (in fractional coordinates)
+    flipped = slab_pmg.copy()
+    for i, site in enumerate(flipped):
+        new_frac = list(site.frac_coords)
+        new_frac[2] = 1.0 - new_frac[2]
+        flipped.replace(i, site.species, new_frac)
+
+    asf = AdsorbateSiteFinder(flipped)
+    coords = asf.find_adsorption_sites(
+        distance=height,
+        symm_reduce=symm_reduce,
+        near_reduce=near_reduce,
+        no_obtuse_hollow=no_obtuse_hollow,
+    )
+
+    # Flip site coordinates back: the "top" of flipped slab = bottom of original
+    # Convert cartesian sites: z -> c_z - z (where c_z is the c lattice height)
+    c_z = slab_pmg.lattice.matrix[2][2]
+    sites = {}
+    for site_type in ['ontop', 'bridge', 'hollow']:
+        flipped_coords = coords.get(site_type, [])
+        original_coords = []
+        for xyz in flipped_coords:
+            original_coords.append([xyz[0], xyz[1], c_z - xyz[2]])
+        sites[site_type] = original_coords
+
+    total = sum(len(v) for v in sites.values())
+    print(f"  Bottom surface sites: {total} "
           f"(ontop={len(sites['ontop'])}, bridge={len(sites['bridge'])}, "
           f"hollow={len(sites['hollow'])})")
 
@@ -342,7 +395,7 @@ def make_graphene_layer(slab, max_strain=5.0, rotation_angles=None):
 def generate_adsorption_configs(slab_ase, slab_path, adsorbate_type, height=2.0,
                                 chain_length=3, ring_size=6,
                                 max_strain=5.0, rotation_angles=None,
-                                min_image_dist=8.0):
+                                min_image_dist=8.0, both_sides=False):
     """
     Generate all adsorption configurations for a given adsorbate type.
 
@@ -401,7 +454,14 @@ def generate_adsorption_configs(slab_ase, slab_path, adsorbate_type, height=2.0,
         return configs
 
     # For molecular adsorbates, find unique sites via pymatgen
-    sites = find_adsorption_sites(slab_path, height=height)
+    print(f"  Finding TOP surface sites...")
+    top_sites = find_adsorption_sites(slab_path, height=height)
+
+    # For asymmetric (dipolar) slabs, also find bottom surface sites
+    bottom_sites = None
+    if both_sides:
+        print(f"  Finding BOTTOM surface sites (asymmetric slab)...")
+        bottom_sites = find_bottom_adsorption_sites(slab_path, height=height)
 
     adsorbate_makers = {
         'single_C': [('C', make_single_C())],
@@ -421,34 +481,52 @@ def generate_adsorption_configs(slab_ase, slab_path, adsorbate_type, height=2.0,
         raise ValueError(f"Unknown adsorbate type: {adsorbate_type}. "
                          f"Choose from: {list(adsorbate_makers.keys()) + ['graphene', 'all']}")
 
-    for ads_name, ads_mol in adsorbates:
-        for site_type, site_coords_list in sites.items():
-            for i, site_xyz in enumerate(site_coords_list):
-                slab_copy = slab_ase.copy()
+    # Build list of (sites_dict, side_label, placement_mode)
+    sides = [('top', top_sites)]
+    if bottom_sites:
+        sides.append(('bot', bottom_sites))
 
-                ads_copy = ads_mol.copy()
-                z_bottom_ads = ads_copy.positions[:, 2].min()
-                ads_copy.positions[:, 2] += (site_xyz[2] - z_bottom_ads)
-                com_xy = ads_copy.get_center_of_mass()[:2]
-                ads_copy.positions[:, 0] += site_xyz[0] - com_xy[0]
-                ads_copy.positions[:, 1] += site_xyz[1] - com_xy[1]
+    for side_label, sites in sides:
+        for ads_name, ads_mol in adsorbates:
+            for site_type, site_coords_list in sites.items():
+                for i, site_xyz in enumerate(site_coords_list):
+                    slab_copy = slab_ase.copy()
+                    ads_copy = ads_mol.copy()
 
-                combined = slab_copy + ads_copy
-                combined.cell = slab_copy.cell
-                combined.pbc = slab_copy.pbc
+                    if side_label == 'top':
+                        # Place above the top surface
+                        z_bottom_ads = ads_copy.positions[:, 2].min()
+                        ads_copy.positions[:, 2] += (site_xyz[2] - z_bottom_ads)
+                    else:
+                        # Place below the bottom surface
+                        # Flip adsorbate so it hangs down, then position at site_xyz[2]
+                        z_top_ads = ads_copy.positions[:, 2].max()
+                        ads_copy.positions[:, 2] = site_xyz[2] - (ads_copy.positions[:, 2] - ads_copy.positions[:, 2].min())
+                        # Alternatively: mirror z relative to bottom
+                        ads_copy.positions[:, 2] = 2 * site_xyz[2] - ads_copy.positions[:, 2]
 
-                config_name = f"{ads_name}{supercell_tag}_{site_type}_{i}"
-                configs.append((combined, config_name, n_slab, f"{na}x{nb}"))
+                    com_xy = ads_copy.get_center_of_mass()[:2]
+                    ads_copy.positions[:, 0] += site_xyz[0] - com_xy[0]
+                    ads_copy.positions[:, 1] += site_xyz[1] - com_xy[1]
+
+                    combined = slab_copy + ads_copy
+                    combined.cell = slab_copy.cell
+                    combined.pbc = slab_copy.pbc
+
+                    side_tag = f"_{side_label}" if both_sides else ""
+                    config_name = f"{ads_name}{supercell_tag}{side_tag}_{site_type}_{i}"
+                    configs.append((combined, config_name, n_slab, f"{na}x{nb}"))
 
     return configs
 
 
 def setup_vasp_inputs(output_dir, combined, n_slab_atoms, relax_fraction,
-                      incar_template=None):
+                      incar_template=None, both_sides=False):
     """Write POSCAR with selective dynamics and optionally copy INCAR."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    flags = apply_selective_dynamics(combined, n_slab_atoms, relax_fraction)
+    flags = apply_selective_dynamics(combined, n_slab_atoms, relax_fraction,
+                                     both_sides=both_sides)
     write_poscar_selective(combined, flags, os.path.join(output_dir, 'POSCAR'))
 
     if incar_template and os.path.exists(incar_template):
@@ -458,7 +536,8 @@ def setup_vasp_inputs(output_dir, combined, n_slab_atoms, relax_fraction,
 
 def process_slab(slab_path, adsorbate_type, height=2.0, chain_length=3,
                  ring_size=6, max_strain=5.0, incar_template=None,
-                 rotation_angles=None, min_image_dist=8.0, relax_fraction=0.25):
+                 rotation_angles=None, min_image_dist=8.0, relax_fraction=0.25,
+                 both_sides=False):
     """Process a single slab file and generate all adsorption configurations."""
     print(f"\nProcessing: {slab_path}")
 
@@ -469,11 +548,14 @@ def process_slab(slab_path, adsorbate_type, height=2.0, chain_length=3,
     b_len = np.linalg.norm(slab_ase.cell[1][:2])
     print(f"  Slab: {len(slab_ase)} atoms, a={a_len:.2f} b={b_len:.2f} Ang")
 
+    if both_sides:
+        print(f"  Asymmetric slab mode: generating adsorption on BOTH top and bottom surfaces")
+
     configs = generate_adsorption_configs(
         slab_ase, slab_path, adsorbate_type, height=height,
         chain_length=chain_length, ring_size=ring_size,
         max_strain=max_strain, rotation_angles=rotation_angles,
-        min_image_dist=min_image_dist,
+        min_image_dist=min_image_dist, both_sides=both_sides,
     )
 
     if not configs:
@@ -501,7 +583,7 @@ def process_slab(slab_path, adsorbate_type, height=2.0, chain_length=3,
     for combined, config_name, n_slab, sc_info in configs:
         output_dir = os.path.join(parent_dir, f"ads_{config_name}")
         setup_vasp_inputs(output_dir, combined, n_slab, relax_fraction,
-                          incar_template)
+                          incar_template, both_sides=both_sides)
         n_ads = len(combined) - n_slab
         results.append({
             'config': config_name,
@@ -542,6 +624,10 @@ def main():
     parser.add_argument('--min_image_dist', type=float, default=8.0,
                         help="Minimum distance between periodic images of adsorbate (Ang, "
                              "default: 8.0). Triggers supercell if too small.")
+    parser.add_argument('--both_sides', action='store_true',
+                        help="Generate adsorption on BOTH top and bottom surfaces. "
+                             "Use for asymmetric/dipolar slabs where top != bottom "
+                             "(e.g., manually created 001 surfaces).")
     parser.add_argument('--incar', default=None,
                         help="INCAR template file to copy into each directory")
     parser.add_argument('--batch', action='store_true', help="Batch mode")
@@ -572,6 +658,7 @@ def main():
                     rotation_angles=args.rotation_angles,
                     min_image_dist=args.min_image_dist,
                     relax_fraction=args.relax_fraction,
+                    both_sides=args.both_sides,
                 )
                 all_results.extend(results)
             except Exception as e:

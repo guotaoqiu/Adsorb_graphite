@@ -114,6 +114,15 @@ The formula is:
 
 where `N_slab` and `A` are auto-read from the slab's CONTCAR/POSCAR.
 
+**Note on dipolar (asymmetric) slabs:**
+
+If surfaxe cannot find non-dipolar terminations for a given Miller index (e.g., 001),
+you may need to create the slab manually. The standard surface energy formula assumes
+two equivalent surfaces and gives an **average** gamma. For asymmetric slabs:
+- The reported gamma is the average of top and bottom surface energies
+- Unphysically large gamma values (e.g., >10 J/m^2) indicate an unstable polar termination
+- Reasonable gamma values are typically 0.5-5 J/m^2
+
 ### Step 4: Generate Adsorption Configurations
 
 Run on the most stable surface from Step 3:
@@ -137,11 +146,26 @@ python3 generate_adsorption.py --slab CONTCAR --adsorbate graphene
 python3 generate_adsorption.py --slab CONTCAR --adsorbate all
 ```
 
+**For asymmetric/dipolar slabs** (top ≠ bottom, e.g., manually created 001):
+
+```bash
+# Generate adsorption on BOTH top and bottom surfaces
+python3 generate_adsorption.py --slab CONTCAR --adsorbate single_C --both_sides
+# Generates: ads_C_top_ontop_0, ads_C_top_bridge_0, ..., ads_C_bot_ontop_0, ads_C_bot_bridge_0, ...
+```
+
+This is necessary because the top and bottom terminations have different chemistry.
+The adsorption energy comparison is still valid: E_ads cancels the clean slab
+(same for top and bottom adsorption), so you can directly compare which side binds
+more strongly.
+
 **Key features:**
 
 - **Symmetry-unique sites only** (pymatgen AdsorbateSiteFinder, typically 3-10 sites)
 - **Selective dynamics** included: top 25% of slab + all adsorbate atoms relaxed,
   bottom 75% fixed. Configurable via `--relax_fraction 0.30`.
+- **Both-sides mode** (`--both_sides`): for asymmetric slabs, generates adsorption
+  on both surfaces. Relaxes top 25% and bottom 25% of slab simultaneously.
 - **Auto-supercell**: if ab-plane is too small for the adsorbate (e.g., C_ring on
   a 4×5 Å surface), automatically creates NxMx1 supercell so periodic images
   are >8 Å apart. Configurable via `--min_image_dist 10.0`.
