@@ -44,6 +44,66 @@ from pymatgen.core import Structure
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
 
 
+# ─── Slab symmetry detection ───
+
+def detect_slab_asymmetry(slab_ase, layer_tol=1.0):
+    """
+    Detect whether a slab has asymmetric (dipolar) top and bottom surfaces
+    by comparing the chemical composition of the top and bottom layers.
+
+    Args:
+        slab_ase: ASE Atoms object of the slab
+        layer_tol: thickness (Ang) to define "surface layer"
+
+    Returns:
+        (is_asymmetric, top_comp, bot_comp, details_str)
+    """
+    positions = slab_ase.get_positions()
+    symbols = slab_ase.get_chemical_symbols()
+    z = positions[:, 2]
+    z_min, z_max = z.min(), z.max()
+
+    # Top layer: atoms within layer_tol of the highest z
+    top_mask = z >= (z_max - layer_tol)
+    bot_mask = z <= (z_min + layer_tol)
+
+    # Count species in each layer
+    top_comp = {}
+    for i in np.where(top_mask)[0]:
+        s = symbols[i]
+        top_comp[s] = top_comp.get(s, 0) + 1
+
+    bot_comp = {}
+    for i in np.where(bot_mask)[0]:
+        s = symbols[i]
+        bot_comp[s] = bot_comp.get(s, 0) + 1
+
+    # Normalize to fractions for comparison (handles different layer sizes)
+    def normalize(comp):
+        total = sum(comp.values())
+        if total == 0:
+            return {}
+        return {k: v / total for k, v in sorted(comp.items())}
+
+    top_frac = normalize(top_comp)
+    bot_frac = normalize(bot_comp)
+
+    # Compare: are they the same within tolerance?
+    all_species = set(list(top_frac.keys()) + list(bot_frac.keys()))
+    max_diff = 0.0
+    for sp in all_species:
+        diff = abs(top_frac.get(sp, 0) - bot_frac.get(sp, 0))
+        max_diff = max(max_diff, diff)
+
+    is_asymmetric = max_diff > 0.15  # >15% composition difference = asymmetric
+
+    top_str = " ".join(f"{k}:{v}" for k, v in sorted(top_comp.items()))
+    bot_str = " ".join(f"{k}:{v}" for k, v in sorted(bot_comp.items()))
+    details = f"Top=[{top_str}] Bot=[{bot_str}] max_diff={max_diff:.0%}"
+
+    return is_asymmetric, top_comp, bot_comp, details
+
+
 # ─── Adsorbate size estimates (diameter in xy-plane, Angstrom) ───
 
 def get_adsorbate_diameter(adsorbate_type, chain_length=3, ring_size=6,
@@ -548,8 +608,20 @@ def process_slab(slab_path, adsorbate_type, height=2.0, chain_length=3,
     b_len = np.linalg.norm(slab_ase.cell[1][:2])
     print(f"  Slab: {len(slab_ase)} atoms, a={a_len:.2f} b={b_len:.2f} Ang")
 
-    if both_sides:
-        print(f"  Asymmetric slab mode: generating adsorption on BOTH top and bottom surfaces")
+    # Auto-detect slab asymmetry if not explicitly set
+    is_asym, top_comp, bot_comp, asym_details = detect_slab_asymmetry(slab_ase)
+    print(f"  Surface analysis: {asym_details}")
+    if both_sides == 'auto':
+        both_sides = is_asym
+        if is_asym:
+            print(f"  AUTO-DETECTED: asymmetric (dipolar) slab → generating both sides")
+        else:
+            print(f"  AUTO-DETECTED: symmetric slab → top surface only")
+    elif both_sides == 'yes' or both_sides is True:
+        both_sides = True
+        print(f"  FORCED: generating adsorption on both sides")
+    else:
+        both_sides = False
 
     configs = generate_adsorption_configs(
         slab_ase, slab_path, adsorbate_type, height=height,
@@ -624,10 +696,11 @@ def main():
     parser.add_argument('--min_image_dist', type=float, default=8.0,
                         help="Minimum distance between periodic images of adsorbate (Ang, "
                              "default: 8.0). Triggers supercell if too small.")
-    parser.add_argument('--both_sides', action='store_true',
-                        help="Generate adsorption on BOTH top and bottom surfaces. "
-                             "Use for asymmetric/dipolar slabs where top != bottom "
-                             "(e.g., manually created 001 surfaces).")
+    parser.add_argument('--both_sides', default='auto',
+                        choices=['auto', 'yes', 'no'],
+                        help="Generate adsorption on both surfaces. "
+                             "'auto' (default): detect asymmetry automatically. "
+                             "'yes': force both sides. 'no': top only.")
     parser.add_argument('--incar', default=None,
                         help="INCAR template file to copy into each directory")
     parser.add_argument('--batch', action='store_true', help="Batch mode")
@@ -677,6 +750,7 @@ def main():
             rotation_angles=args.rotation_angles,
             min_image_dist=args.min_image_dist,
             relax_fraction=args.relax_fraction,
+            both_sides=args.both_sides,
         )
 
 

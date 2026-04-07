@@ -146,26 +146,18 @@ python3 generate_adsorption.py --slab CONTCAR --adsorbate graphene
 python3 generate_adsorption.py --slab CONTCAR --adsorbate all
 ```
 
-**For asymmetric/dipolar slabs** (top ≠ bottom, e.g., manually created 001):
-
-```bash
-# Generate adsorption on BOTH top and bottom surfaces
-python3 generate_adsorption.py --slab CONTCAR --adsorbate single_C --both_sides
-# Generates: ads_C_top_ontop_0, ads_C_top_bridge_0, ..., ads_C_bot_ontop_0, ads_C_bot_bridge_0, ...
-```
-
-This is necessary because the top and bottom terminations have different chemistry.
-The adsorption energy comparison is still valid: E_ads cancels the clean slab
-(same for top and bottom adsorption), so you can directly compare which side binds
-more strongly.
-
 **Key features:**
 
 - **Symmetry-unique sites only** (pymatgen AdsorbateSiteFinder, typically 3-10 sites)
 - **Selective dynamics** included: top 25% of slab + all adsorbate atoms relaxed,
   bottom 75% fixed. Configurable via `--relax_fraction 0.30`.
-- **Both-sides mode** (`--both_sides`): for asymmetric slabs, generates adsorption
-  on both surfaces. Relaxes top 25% and bottom 25% of slab simultaneously.
+- **Auto-detect asymmetric slabs** (`--both_sides auto`, default): compares chemical
+  composition of top vs bottom surface layers. If different (>15% composition
+  difference), automatically generates adsorption on both surfaces. Examples:
+  - CaBC2 (010) surfaxe: symmetric → top only
+  - CaBC2 (001) manual: Ca-top vs BC-bottom → both sides
+  - CaBC2 (111) term_2: Ca-rich top vs B-rich bottom → both sides
+  Override with `--both_sides yes` (force both) or `--both_sides no` (top only).
 - **Auto-supercell**: if ab-plane is too small for the adsorbate (e.g., C_ring on
   a 4×5 Å surface), automatically creates NxMx1 supercell so periodic images
   are >8 Å apart. Configurable via `--min_image_dist 10.0`.
