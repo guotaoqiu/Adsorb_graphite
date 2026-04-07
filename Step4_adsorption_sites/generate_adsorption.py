@@ -213,23 +213,35 @@ def apply_selective_dynamics(combined, n_slab_atoms, relax_fraction=0.25,
 
 
 def write_poscar_selective(atoms, flags, filepath):
-    """Write POSCAR with selective dynamics flags."""
+    """Write POSCAR with selective dynamics flags.
+
+    Handles the case where the input atoms were read from a CONTCAR that
+    already had selective dynamics - strips old flags before adding new ones.
+    """
     # First write a normal POSCAR via ASE, then inject selective dynamics
     write(filepath + '.tmp', atoms, format='vasp')
 
     with open(filepath + '.tmp', 'r') as f:
         lines = f.readlines()
 
-    # Parse header
+    # Parse header: lines 0-6 are always comment, scale, 3x lattice, species, counts
     comment = lines[0]
     scale = lines[1]
     lattice = lines[2:5]
     species_line = lines[5]
     counts_line = lines[6]
-    coord_line = lines[7]  # "Direct" or "Cartesian"
 
     counts = list(map(int, counts_line.split()))
     total = sum(counts)
+
+    # Detect if ASE already wrote "Selective dynamics" line
+    idx = 7
+    if lines[idx].strip().lower().startswith('s'):
+        # Skip the existing "Selective dynamics" line
+        idx += 1
+
+    coord_line = lines[idx]  # "Direct" or "Cartesian"
+    idx += 1  # Now idx points to first coordinate line
 
     with open(filepath, 'w') as f:
         f.write(comment)
@@ -241,9 +253,10 @@ def write_poscar_selective(atoms, flags, filepath):
         f.write('Selective dynamics\n')
         f.write(coord_line)
         for i in range(total):
-            # Original coordinate line (strip newline, add flag)
-            coord = lines[8 + i].rstrip()
-            f.write(f'{coord}  {flags[i]}\n')
+            parts = lines[idx + i].split()
+            # Take only the first 3 values (x, y, z), discard any old T/F flags
+            x, y, z = parts[0], parts[1], parts[2]
+            f.write(f'  {x}  {y}  {z}  {flags[i]}\n')
 
     os.remove(filepath + '.tmp')
 
