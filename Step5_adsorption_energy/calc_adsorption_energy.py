@@ -295,9 +295,14 @@ def main():
     parser.add_argument('--ads_dir', default=None, help="Single adsorption directory")
     parser.add_argument('--batch', action='store_true', help="Process all ads_* directories")
     parser.add_argument('--pattern', default='ads_*', help="Glob pattern for batch mode")
-    parser.add_argument('--slab_energy', type=float, default=None, help="Clean 1x1 slab energy (eV)")
-    parser.add_argument('--slab_outcar', default=None, help="Path to clean slab OUTCAR")
-    parser.add_argument('--slab_dir', default='.', help="Clean slab directory (for species comparison)")
+    parser.add_argument('--slab_energy', type=float, default=None,
+                        help="Clean 1x1 slab total energy (eV). Use when OUTCAR is not available.")
+    parser.add_argument('--slab_outcar', default=None,
+                        help="Path to clean slab OUTCAR (reads energy automatically)")
+    parser.add_argument('--slab_dir', default='.',
+                        help="Clean slab directory containing CONTCAR/POSCAR for species "
+                             "comparison, and optionally OUTCAR for energy. "
+                             "Default: current directory.")
 
     # Per-adsorbate reference energies
     ref_group = parser.add_argument_group('Reference energies (gas-phase, total energy)')
@@ -356,7 +361,28 @@ def main():
     elif args.slab_energy is not None:
         e_slab = args.slab_energy
     else:
-        e_slab = get_energy(args.slab_dir)
+        # Try to find OUTCAR: first in slab_dir, then search common locations
+        slab_outcar = None
+        search_paths = [
+            os.path.join(args.slab_dir, 'OUTCAR'),
+            os.path.join(args.slab_dir, 'OSZICAR'),
+        ]
+        for p in search_paths:
+            if os.path.exists(p):
+                slab_outcar = p
+                break
+
+        if slab_outcar:
+            e_slab = get_energy(args.slab_dir)
+        else:
+            # OUTCAR not found - give a helpful error
+            parser.error(
+                f"No OUTCAR/OSZICAR found in '{args.slab_dir}'.\n"
+                f"The clean slab energy is required. Provide it via one of:\n"
+                f"  --slab_energy -XXX.XXX     (total energy in eV)\n"
+                f"  --slab_outcar /path/to/slab/OUTCAR\n"
+                f"  --slab_dir /path/to/slab/  (directory with OUTCAR + CONTCAR)"
+            )
 
     slab_species, slab_counts = get_natoms_and_species(args.slab_dir)
 
