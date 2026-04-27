@@ -1,5 +1,6 @@
-# INCAR for surface/adsorption relaxation (single-step, balanced)
-# For faster workflow, use INCAR_ads_prerelax → INCAR_ads_refine instead
+# INCAR for adsorption structure refinement (Phase 2: accurate)
+# Start from CONTCAR of pre-relaxation (Phase 1)
+# This gives the final energy for adsorption energy calculation
 
 # Electronic
 ALGO = Fast
@@ -17,9 +18,9 @@ LMAXMIX = 6
 LMIXTAU = True
 
 # Ionic
-IBRION = 2
+IBRION = 1
 ISIF = 2
-NSW = 300
+NSW = 100
 EDIFFG = -0.02
 
 # Parallelization
@@ -31,9 +32,9 @@ KSPACING = 0.15
 LDIPOL = True
 IDIPOL = 3
 
-# Output
+# Output for analysis
 LWAVE = False
-LCHARG = False
+LCHARG = True
 LAECHG = False
 LELF = False
 LORBIT = 11

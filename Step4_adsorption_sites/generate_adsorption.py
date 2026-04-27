@@ -694,8 +694,9 @@ def main():
                         choices=['single_C', 'C_chain_v', 'C_chain_h',
                                  'C_ring', 'C_ring_v', 'graphene', 'all'],
                         help="Adsorbate type")
-    parser.add_argument('--height', type=float, default=2.0,
-                        help="Adsorption height above surface (Ang, default: 2.0)")
+    parser.add_argument('--height', type=float, default=2.5,
+                        help="Adsorption height above surface (Ang, default: 2.5). "
+                             "Too small (<1.8) can cause VASP FEXCF errors.")
     parser.add_argument('--chain_length', type=int, default=3,
                         help="Number of C atoms in chain (default: 3)")
     parser.add_argument('--ring_size', type=int, default=6,

@@ -286,11 +286,38 @@ Stored in `templates/reference_energies.json`. Load via `--ref_json`.
 
 ## INCAR Templates
 
-### Surface/Adsorption Relaxation (`INCAR_relax_template`)
-- ISIF=2 (cell fixed), IBRION=2, NSW=100
-- ENCUT=680, EDIFF=1e-5, KSPACING=0.15
-- LDIPOL=True, IDIPOL=3, LVHAR=True (dipole correction for slab)
-- ISPIN=2, LMAXMIX=6
+### Two-Phase Adsorption Relaxation (Recommended)
+
+Phase 1 is ~3-5x faster than Phase 2. Together they are faster than one
+long accurate run because Phase 1 handles the large atomic displacements cheaply.
+
+**Phase 1: Pre-relaxation (`INCAR_ads_prerelax`)**
+- ALGO=Fast, ENCUT=520, EDIFF=1e-4, PREC=Normal
+- KSPACING=0.20 (coarser k-mesh, saves ~40% time)
+- IBRION=2, NSW=200, EDIFFG=-0.05 eV/Å
+- All expensive I/O disabled (LCHARG=False, LORBIT=0, etc.)
+- Gets structure close to minimum quickly
+
+**Phase 2: Refinement (`INCAR_ads_refine`)**
+- ALGO=Fast, ENCUT=680, EDIFF=1e-5, PREC=Accurate
+- KSPACING=0.15 (full k-mesh)
+- IBRION=1 (RMM-DIIS, faster near minimum), NSW=100, EDIFFG=-0.02 eV/Å
+- Start from Phase 1 CONTCAR
+- Gives final energy for adsorption energy calculation
+
+```bash
+# Phase 1: coarse relaxation
+cp INCAR_ads_prerelax INCAR
+vasp_std
+# Phase 2: copy CONTCAR -> POSCAR, switch INCAR
+cp CONTCAR POSCAR
+cp INCAR_ads_refine INCAR
+vasp_std
+```
+
+### Single-Step Relaxation (`INCAR_relax_template`)
+- ALGO=Fast, ENCUT=680, EDIFF=1e-5, NSW=300, EDIFFG=-0.02 eV/Å
+- Use when you prefer simplicity over speed
 
 ### Frequency Calculation (`INCAR_freq_template`)
 - IBRION=5 (symmetric finite differences), NFREE=2
@@ -298,6 +325,29 @@ Stored in `templates/reference_energies.json`. Load via `--ref_json`.
 - EDIFF=1e-7 (tighter convergence), LREAL=False (reciprocal space)
 - NSW=1, ISIF=0
 - LDIPOL=True, IDIPOL=3
+
+### Key Changes from Original INCAR
+
+| Setting | Old | New | Why |
+|---------|-----|-----|-----|
+| ALGO | Normal | **Fast** | Davidson+RMM-DIIS converges faster for surfaces |
+| ENCUT | 680 | **520** (Phase 1) | ~40% faster, sufficient for geometry |
+| EDIFF | 1e-5 | **1e-4** (Phase 1) | Don't need tight SCF during big ionic moves |
+| PREC | Accurate | **Normal** (Phase 1) | Matches lower ENCUT |
+| KSPACING | 0.15 | **0.20** (Phase 1) | Fewer k-points for coarse geometry |
+| NSW | 100 | **200** (Phase 1) | More room for convergence |
+| EDIFFG | (none) | **-0.05/-0.02** | Force convergence criterion (eV/Å) |
+| IBRION | 2 | **1** (Phase 2) | RMM-DIIS faster near minimum |
+| LCHARG | True | **False** (Phase 1) | Skip writing CHGCAR (~seconds/step) |
+| LORBIT | 11 | **0** (Phase 1) | Skip projected DOS during relaxation |
+| LVTOT | True | **False** (Phase 1) | Skip writing LOCPOT |
+| NEDOS | 2000 | removed (Phase 1) | Irrelevant during relaxation |
+
+### Troubleshooting
+
+**FEXCF error** ("exchange-correlation table too small"):
+Atoms are too close together. Fix: increase `--height 3.0` in generate_adsorption.py,
+or manually adjust the initial POSCAR to move the adsorbate further from the surface.
 
 ---
 
