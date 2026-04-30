@@ -47,7 +47,7 @@ def cmd_setup(args):
     print("=" * 70)
     print("STEP 1: Setting up bulk relaxations")
     print("=" * 70)
-    setup_bulk_calculations(args.input_dir, args.bulk_dir, args.potcar_dir)
+    setup_bulk_calculations(args.input_dir, args.bulk_dir)
 
     print(f"\nNext: run 'python3 run_screening.py submit' to submit jobs")
 
@@ -209,7 +209,7 @@ def main():
     parser.add_argument('--ads_dir', default='./3_adsorption')
     parser.add_argument('--partition', default='cu')
     parser.add_argument('--ntasks', type=int, default=64)
-    parser.add_argument('--potcar_dir', default=None)
+
 
     sub = parser.add_subparsers(dest='command')
 
@@ -250,7 +250,7 @@ def main():
             if not args.input_dir:
                 print("--input_dir required for step1 setup")
                 return
-            setup_bulk_calculations(args.input_dir, args.bulk_dir, args.potcar_dir)
+            setup_bulk_calculations(args.input_dir, args.bulk_dir)
         elif args.action in ('submit', 'resubmit'):
             submit_bulk_jobs(args.bulk_dir, args.partition, args.ntasks)
         elif args.action == 'status':

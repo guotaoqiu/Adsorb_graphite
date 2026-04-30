@@ -53,9 +53,39 @@ def write_submit_script(calc_dir, job_name='vasp', nodes=1, ntasks=64,
     return script_path
 
 
+def ensure_potcar(calc_dir):
+    """Generate POTCAR using vaspkit if not already present."""
+    potcar_path = os.path.join(calc_dir, 'POTCAR')
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+
+    poscar_path = os.path.join(calc_dir, 'POSCAR')
+    if not os.path.exists(poscar_path):
+        print(f"  WARNING: No POSCAR in {calc_dir}, cannot generate POTCAR")
+        return False
+
+    result = subprocess.run(
+        ['vaspkit', '-task', '103'],
+        cwd=calc_dir,
+        capture_output=True, text=True,
+        timeout=30,
+    )
+
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+
+    print(f"  WARNING: vaspkit -task 103 failed in {calc_dir}: {result.stderr.strip()}")
+    return False
+
+
 def submit_job(calc_dir, job_name='vasp', dependency_jobid=None,
                nodes=1, ntasks=64, partition='cu', mem='12000mb'):
-    """Submit a SLURM job and return the job ID."""
+    """Submit a SLURM job and return the job ID. Generates POTCAR first via vaspkit."""
+    # Ensure POTCAR exists before submitting
+    if not ensure_potcar(calc_dir):
+        print(f"  ERROR: No POTCAR for {calc_dir}, skipping submission")
+        return None
+
     write_submit_script(calc_dir, job_name, nodes, ntasks, partition, mem,
                         dependency_jobid)
 
