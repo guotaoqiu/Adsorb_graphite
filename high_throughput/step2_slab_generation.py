@@ -6,7 +6,12 @@ Uses surfaxe for non-dipolar terminations on low-index surfaces.
 Falls back to pymatgen SlabGenerator if surfaxe fails.
 
 Usage:
+    # Setup + submit in one go (most common)
     python3 step2_slab_generation.py --bulk_dir ./1_bulk --work_dir ./2_slabs
+
+    # Or step-by-step
+    python3 step2_slab_generation.py setup --bulk_dir ./1_bulk --work_dir ./2_slabs
+    python3 step2_slab_generation.py submit --work_dir ./2_slabs
     python3 step2_slab_generation.py status --work_dir ./2_slabs
 """
 
@@ -15,12 +20,39 @@ import sys
 import json
 import shutil
 import argparse
+import subprocess
 import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
-from utils.job_manager import submit_job, check_vasp_converged, parse_energy, ensure_potcar
+from utils.job_manager import submit_job, check_vasp_converged, parse_energy
+
+
+def ensure_potcar(calc_dir):
+    """Generate POTCAR using vaspkit if not already present."""
+    potcar_path = os.path.join(calc_dir, 'POTCAR')
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+
+    poscar_path = os.path.join(calc_dir, 'POSCAR')
+    if not os.path.exists(poscar_path):
+        return False
+
+    try:
+        subprocess.run(
+            ['vaspkit', '-task', '103'],
+            cwd=calc_dir,
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+
+    print(f"    WARNING: POTCAR generation failed in {calc_dir}")
+    return False
 
 
 HKL_INDICES = [
@@ -309,25 +341,63 @@ def submit_slab_jobs(work_dir, partition='cu', ntasks=64):
     print(f"\nSubmitted: {submitted} slab jobs")
 
 
+def show_status(work_dir):
+    """Show status of all slab calculations."""
+    manifest_path = os.path.join(work_dir, 'manifest.json')
+    if not os.path.exists(manifest_path):
+        print("No manifest.json found. Run setup first.")
+        return
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    done = 0
+    total = 0
+    for entry in manifest:
+        print(f"\n  {entry['compound']}:")
+        for sd in entry['slab_dirs']:
+            total += 1
+            converged, msg = check_vasp_converged(sd)
+            name = os.path.basename(sd)
+            if converged:
+                done += 1
+                print(f"    {name:<25} DONE         {msg}")
+            else:
+                print(f"    {name:<25} PENDING      {msg}")
+    print(f"\n  Total: {done}/{total} converged")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Step 2: Slab generation")
+    parser = argparse.ArgumentParser(
+        description="Step 2: Slab generation + relaxation.\n"
+                    "Without subcommand: runs setup then submit.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Top-level args (used when running without subcommand)
+    parser.add_argument('--bulk_dir', default='./1_bulk')
+    parser.add_argument('--work_dir', default='./2_slabs')
+    parser.add_argument('--vacuum', type=float, default=20.0)
+    parser.add_argument('--thickness', type=float, default=20.0)
+    parser.add_argument('--relax_fraction', type=float, default=0.25)
+    parser.add_argument('--timeout', type=int, default=120,
+                        help="Timeout in seconds for surfaxe per compound (default: 120)")
+    parser.add_argument('--partition', default='cu')
+    parser.add_argument('--ntasks', type=int, default=64)
+
     sub = parser.add_subparsers(dest='command')
 
-    p_setup = sub.add_parser('setup')
+    p_setup = sub.add_parser('setup', help="Generate slabs only (no submit)")
     p_setup.add_argument('--bulk_dir', default='./1_bulk')
     p_setup.add_argument('--work_dir', default='./2_slabs')
     p_setup.add_argument('--vacuum', type=float, default=20.0)
     p_setup.add_argument('--thickness', type=float, default=20.0)
     p_setup.add_argument('--relax_fraction', type=float, default=0.25)
-    p_setup.add_argument('--timeout', type=int, default=120,
-                         help="Timeout in seconds for surfaxe per compound (default: 120)")
+    p_setup.add_argument('--timeout', type=int, default=120)
 
-    p_submit = sub.add_parser('submit')
+    p_submit = sub.add_parser('submit', help="Submit SLURM jobs")
     p_submit.add_argument('--work_dir', default='./2_slabs')
     p_submit.add_argument('--partition', default='cu')
     p_submit.add_argument('--ntasks', type=int, default=64)
 
-    p_status = sub.add_parser('status')
+    p_status = sub.add_parser('status', help="Check calculation status")
     p_status.add_argument('--work_dir', default='./2_slabs')
 
     args = parser.parse_args()
@@ -339,20 +409,16 @@ def main():
     elif args.command == 'submit':
         submit_slab_jobs(args.work_dir, args.partition, args.ntasks)
     elif args.command == 'status':
-        # Reuse scan logic
-        manifest_path = os.path.join(args.work_dir, 'manifest.json')
-        if os.path.exists(manifest_path):
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            for entry in manifest:
-                print(f"\n  {entry['compound']}:")
-                for sd in entry['slab_dirs']:
-                    converged, msg = check_vasp_converged(sd)
-                    name = os.path.basename(sd)
-                    status = "DONE" if converged else "PENDING/FAILED"
-                    print(f"    {name:<25} {status:<12} {msg}")
+        show_status(args.work_dir)
     else:
-        parser.print_help()
+        # No subcommand: run setup + submit
+        setup_slab_calculations(args.bulk_dir, args.work_dir,
+                                 args.vacuum, args.thickness, args.relax_fraction,
+                                 args.timeout)
+        print(f"\n{'=' * 70}")
+        print("Submitting slab relaxation jobs...")
+        print("=" * 70)
+        submit_slab_jobs(args.work_dir, args.partition, args.ntasks)
 
 
 if __name__ == "__main__":

@@ -27,8 +27,27 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
 from utils.job_manager import (
-    submit_job, scan_status, check_vasp_converged, parse_energy, ensure_potcar
+    submit_job, scan_status, check_vasp_converged, parse_energy
 )
+
+
+def ensure_potcar(calc_dir):
+    """Generate POTCAR using vaspkit if not already present."""
+    import subprocess
+    potcar_path = os.path.join(calc_dir, 'POTCAR')
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+    if not os.path.exists(os.path.join(calc_dir, 'POSCAR')):
+        return False
+    try:
+        subprocess.run(['vaspkit', '-task', '103'], cwd=calc_dir,
+                       capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if os.path.exists(potcar_path) and os.path.getsize(potcar_path) > 0:
+        return True
+    print(f"    WARNING: POTCAR generation failed in {calc_dir}")
+    return False
 
 
 def find_structure_files(input_dir):
