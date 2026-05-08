@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
-from utils.job_manager import submit_job, check_vasp_converged, parse_energy
+from utils.job_manager import submit_job, check_vasp_converged, parse_energy, ensure_potcar
 
 # Gas-phase reference energies
 REF_ENERGIES = {
@@ -208,13 +208,6 @@ def setup_adsorption(slab_dir, work_dir, height=2.5, relax_fraction=0.25):
     with open(slab_manifest_path) as f:
         slab_manifest = json.load(f)
 
-    # Build lookup for bulk POTCAR
-    bulk_potcar_lookup = {}
-    for entry in slab_manifest:
-        bulk_potcar = os.path.join(entry['bulk_dir'], 'POTCAR')
-        if os.path.exists(bulk_potcar):
-            bulk_potcar_lookup[entry['compound']] = bulk_potcar
-
     ads_manifest = []
 
     for compound, data in surface_energies.items():
@@ -269,10 +262,8 @@ def setup_adsorption(slab_dir, work_dir, height=2.5, relax_fraction=0.25):
                 params = generate_incar(species, counts, calc_type='ads_relax')
                 write_incar(params, os.path.join(ads_dir, 'INCAR'))
 
-                # Copy POTCAR
-                if compound in bulk_potcar_lookup:
-                    # Need to regenerate POTCAR if species order changed (C added)
-                    pass  # For now, user generates POTCAR separately
+                # Generate POTCAR via vaspkit (reads POSCAR, handles new species like C)
+                ensure_potcar(ads_dir)
 
                 compound_ads_dirs.append({
                     'dir': ads_dir,
