@@ -93,25 +93,51 @@ def add_selective_dynamics(poscar_path, relax_fraction=0.25):
             f.write(f"{coord_lines[i]}  {flag}\n")
 
 
-def generate_slabs_for_compound(bulk_contcar, compound_slab_dir, vacuum=20.0,
-                                 thickness=20.0):
-    """Generate slabs for one compound using surfaxe, fallback to pymatgen."""
-    slab_dirs = []
+def _run_surfaxe(bulk_contcar, hkl_indices, thickness, vacuum, result_holder):
+    """Worker function for surfaxe with timeout."""
+    from surfaxe.generation import generate_slabs
+    result_holder.append(generate_slabs(
+        structure=bulk_contcar,
+        hkl=hkl_indices,
+        thicknesses=[thickness],
+        vacuums=[vacuum],
+        save_slabs=False,
+        save_metadata=False,
+        processes=1,
+    ))
 
+
+def generate_slabs_for_compound(bulk_contcar, compound_slab_dir, vacuum=20.0,
+                                 thickness=20.0, timeout=120):
+    """Generate slabs for one compound using surfaxe, fallback to pymatgen.
+
+    Args:
+        timeout: max seconds to wait for surfaxe per compound (default: 120).
+    """
+    slab_dirs = []
+    all_slabs = []
+
+    # Try surfaxe with timeout
     try:
-        from surfaxe.generation import generate_slabs
-        all_slabs = generate_slabs(
-            structure=bulk_contcar,
-            hkl=HKL_INDICES,
-            thicknesses=[thickness],
-            vacuums=[vacuum],
-            save_slabs=False,
-            save_metadata=False,
-            processes=1,
+        import multiprocessing
+        manager = multiprocessing.Manager()
+        result_holder = manager.list()
+
+        proc = multiprocessing.Process(
+            target=_run_surfaxe,
+            args=(bulk_contcar, HKL_INDICES, thickness, vacuum, result_holder)
         )
+        proc.start()
+        proc.join(timeout=timeout)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(5)
+            print(f"    surfaxe timed out after {timeout}s, falling back to pymatgen")
+        elif result_holder:
+            all_slabs = result_holder[0] or []
     except Exception as e:
         print(f"    surfaxe failed: {e}")
-        all_slabs = []
 
     # Fallback to pymatgen if surfaxe found nothing
     if not all_slabs:
@@ -182,7 +208,7 @@ def generate_slabs_for_compound(bulk_contcar, compound_slab_dir, vacuum=20.0,
 
 
 def setup_slab_calculations(bulk_dir, work_dir, vacuum=20.0, thickness=20.0,
-                             relax_fraction=0.25):
+                             relax_fraction=0.25, timeout=120):
     """Set up slab generation and relaxation for all converged bulk calculations."""
     os.makedirs(work_dir, exist_ok=True)
 
@@ -218,7 +244,8 @@ def setup_slab_calculations(bulk_dir, work_dir, vacuum=20.0, thickness=20.0,
 
         # Generate slabs
         slab_dirs = generate_slabs_for_compound(
-            bulk_contcar, compound_slab_dir, vacuum, thickness
+            bulk_contcar, compound_slab_dir, vacuum, thickness,
+            timeout=timeout,
         )
 
         if not slab_dirs:
@@ -291,6 +318,8 @@ def main():
     p_setup.add_argument('--vacuum', type=float, default=20.0)
     p_setup.add_argument('--thickness', type=float, default=20.0)
     p_setup.add_argument('--relax_fraction', type=float, default=0.25)
+    p_setup.add_argument('--timeout', type=int, default=120,
+                         help="Timeout in seconds for surfaxe per compound (default: 120)")
 
     p_submit = sub.add_parser('submit')
     p_submit.add_argument('--work_dir', default='./2_slabs')
@@ -304,7 +333,8 @@ def main():
 
     if args.command == 'setup':
         setup_slab_calculations(args.bulk_dir, args.work_dir,
-                                 args.vacuum, args.thickness, args.relax_fraction)
+                                 args.vacuum, args.thickness, args.relax_fraction,
+                                 args.timeout)
     elif args.command == 'submit':
         submit_slab_jobs(args.work_dir, args.partition, args.ntasks)
     elif args.command == 'status':
