@@ -266,7 +266,7 @@ def setup_adsorption(slab_dir, work_dir, height=2.5, relax_fraction=0.25):
                 # Generate INCAR (prerelax phase)
                 species, counts = read_species_from_poscar(
                     os.path.join(ads_dir, 'POSCAR'))
-                params = generate_incar(species, counts, calc_type='ads_prerelax')
+                params = generate_incar(species, counts, calc_type='ads_relax')
                 write_incar(params, os.path.join(ads_dir, 'INCAR'))
 
                 # Copy POTCAR

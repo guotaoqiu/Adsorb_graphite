@@ -192,95 +192,66 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
     # Base settings (common to all)
     params = {
         'ALGO': 'Fast',
-        'EDIFF': 1e-5,
-        'ENCUT': 680,
-        'PREC': 'Accurate',
+        'EDIFF': 1e-4,
+        'ENCUT': 520,
+        'PREC': 'Normal',
         'ISMEAR': 0,
         'SIGMA': 0.2,
         'ISPIN': 2,
-        'NELM': 200,
-        'NELMIN': 5,
+        'NELM': 120,
+        'NELMIN': 4,
         'LREAL': 'Auto',
         'LASPH': True,
         'LMAXMIX': lmaxmix,
         'LMIXTAU': True,
         'MAGMOM': magmom,
-        'KSPACING': kspacing,
+        'KSPACING': max(kspacing, 0.25),
         'KPAR': 4,
         'NCORE': 16,
         'LWAVE': False,
+        'LCHARG': False,
+        'LAECHG': False,
+        'LORBIT': 0,
+        'LVTOT': False,
     }
 
     # Calculation-type-specific settings
     if calc_type == 'bulk_relax':
         params.update({
-            'ALGO': 'All',
             'IBRION': 2,
             'ISIF': 3,
             'NSW': 200,
             'EDIFFG': -0.05,
-            'ENAUG': 1360,
-            'LAECHG': True,
-            'LCHARG': True,
-            'LORBIT': 11,
-            'LVTOT': True,
-            'LELF': False,
         })
 
     elif calc_type == 'slab_relax':
         params.update({
             'IBRION': 2,
             'ISIF': 2,
-            'NSW': 200,
-            'EDIFFG': -0.03,
-            'LCHARG': False,
-            'LAECHG': False,
-            'LORBIT': 0,
-            'LVTOT': False,
-            'LVHAR': False,
+            'NSW': 150,
+            'EDIFFG': -0.05,
             'LDIPOL': True,
             'IDIPOL': 3,
         })
 
-    elif calc_type == 'ads_prerelax':
+    elif calc_type in ('ads_prerelax', 'ads_relax'):
         params.update({
-            'ENCUT': 520,
-            'EDIFF': 1e-4,
-            'PREC': 'Normal',
             'IBRION': 2,
             'ISIF': 2,
-            'NSW': 200,
+            'NSW': 150,
             'EDIFFG': -0.05,
-            'KSPACING': max(kspacing, 0.20),
-            'LCHARG': False,
-            'LAECHG': False,
-            'LORBIT': 0,
-            'LVTOT': False,
-            'LVHAR': False,
             'LDIPOL': True,
             'IDIPOL': 3,
-        })
-
-    elif calc_type == 'ads_refine':
-        params.update({
-            'IBRION': 1,
-            'ISIF': 2,
-            'NSW': 100,
-            'EDIFFG': -0.02,
-            'LCHARG': True,
-            'LAECHG': False,
-            'LORBIT': 11,
-            'LVTOT': False,
-            'LVHAR': True,
-            'LDIPOL': True,
-            'IDIPOL': 3,
-            'NEDOS': 2000,
         })
 
     elif calc_type == 'static':
         params.update({
+            'ENCUT': 680,
+            'EDIFF': 1e-5,
+            'PREC': 'Accurate',
             'IBRION': -1,
             'NSW': 0,
+            'NELM': 200,
             'LCHARG': True,
             'LAECHG': True,
             'LORBIT': 11,
