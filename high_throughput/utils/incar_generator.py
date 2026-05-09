@@ -191,7 +191,7 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
 
     # Base settings (common to all)
     params = {
-        'ALGO': 'Fast',
+        'ALGO': 'Normal',
         'EDIFF': 1e-4,
         'ENCUT': 520,
         'PREC': 'Normal',
@@ -232,6 +232,10 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
             'EDIFFG': -0.05,
             'LDIPOL': True,
             'IDIPOL': 3,
+            # Prevent charge sloshing along vacuum direction
+            'AMIN': 0.01,
+            'AMIX': 0.1,
+            'BMIX': 0.0001,
         })
 
     elif calc_type in ('ads_prerelax', 'ads_relax'):
@@ -242,6 +246,9 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
             'EDIFFG': -0.05,
             'LDIPOL': True,
             'IDIPOL': 3,
+            'AMIN': 0.01,
+            'AMIX': 0.1,
+            'BMIX': 0.0001,
         })
 
     elif calc_type == 'static':

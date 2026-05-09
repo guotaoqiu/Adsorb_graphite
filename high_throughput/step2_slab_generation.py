@@ -62,6 +62,30 @@ HKL_INDICES = [
 ]
 
 
+def write_clean_poscar(slab_struct, filepath):
+    """Write a pymatgen Structure as a clean POSCAR without site properties.
+
+    pymatgen's slab.to(fmt='poscar') can produce broken POSCARs with
+    oxidation states or site properties that create duplicate species
+    (e.g., 24 types for 40 atoms). This writes a clean POSCAR with
+    only element symbols.
+    """
+    from pymatgen.io.vasp import Poscar
+    # Remove all site properties (oxidation states, magmoms, etc.)
+    clean = slab_struct.copy()
+    clean.remove_site_property('selective_dynamics') if 'selective_dynamics' in clean.site_properties else None
+    # Remove oxidation states by converting to simple Structure
+    from pymatgen.core import Structure, Lattice
+    clean_struct = Structure(
+        lattice=clean.lattice,
+        species=[site.specie.element if hasattr(site.specie, 'element') else site.specie
+                 for site in clean],
+        coords=[site.frac_coords for site in clean],
+    )
+    poscar = Poscar(clean_struct, sort_structure=True)
+    poscar.write_file(filepath)
+
+
 def add_selective_dynamics(poscar_path, relax_fraction=0.25):
     """Add selective dynamics to a slab POSCAR (top+bottom relax_fraction relaxed)."""
     with open(poscar_path, 'r') as f:
@@ -190,8 +214,7 @@ def generate_slabs_for_compound(bulk_contcar, compound_slab_dir, vacuum=20.0,
                         folder = os.path.join(compound_slab_dir,
                                               f"surf_{hkl_str}_term_{j}")
                         os.makedirs(folder, exist_ok=True)
-                        slab.to(fmt="poscar",
-                                filename=os.path.join(folder, 'POSCAR'))
+                        write_clean_poscar(slab, os.path.join(folder, 'POSCAR'))
 
                         m = slab.lattice.matrix
                         area = np.linalg.norm(np.cross(m[0], m[1]))
@@ -220,7 +243,7 @@ def generate_slabs_for_compound(bulk_contcar, compound_slab_dir, vacuum=20.0,
             os.makedirs(folder, exist_ok=True)
 
             slab_struct = slab_dict['slab']
-            slab_struct.to(fmt="poscar", filename=os.path.join(folder, 'POSCAR'))
+            write_clean_poscar(slab_struct, os.path.join(folder, 'POSCAR'))
 
             m = slab_struct.lattice.matrix
             area = np.linalg.norm(np.cross(m[0], m[1]))
