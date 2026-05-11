@@ -77,13 +77,15 @@ DEFAULT_MAGMOMS = {
 
 
 def get_lmaxmix(elements):
-    """Get LMAXMIX based on elements present."""
+    """Get LMAXMIX based on elements present.
+
+    Minimum is 4 (not 2) because large systems with p-orbital elements
+    (Al, B, C, Si, etc.) converge very poorly with LMAXMIX=2.
+    """
     elems = set(elements)
     if elems & F_BLOCK:
         return 6
-    elif elems & D_BLOCK:
-        return 4
-    return 2
+    return 4
 
 
 def should_add_u(elements):
@@ -157,6 +159,42 @@ def get_kspacing(bandgap=None):
         return min(kspacing, 0.44)
 
 
+def estimate_kpoints(lattice_lengths, kspacing):
+    """Estimate total number of k-points from lattice parameters and KSPACING.
+
+    lattice_lengths: (a, b, c) in Angstrom
+    Returns estimated total k-points.
+    """
+    nk = []
+    for L in lattice_lengths:
+        n = max(1, int(np.ceil(2 * np.pi / (L * kspacing))))
+        nk.append(n)
+    return nk[0] * nk[1] * nk[2], nk
+
+
+def get_kpar(lattice_lengths, kspacing, max_kpar=4):
+    """Determine KPAR based on estimated k-points.
+
+    KPAR must be <= total number of k-points, otherwise VASP wastes
+    resources dividing nothing.
+    """
+    total_kpts, nk = estimate_kpoints(lattice_lengths, kspacing)
+    kpar = min(max_kpar, total_kpts)
+    return max(1, kpar)
+
+
+def read_lattice_from_poscar(poscar_path):
+    """Read lattice vector lengths from POSCAR/CONTCAR."""
+    with open(poscar_path, 'r') as f:
+        lines = f.readlines()
+    scale = float(lines[1].strip())
+    lengths = []
+    for i in range(2, 5):
+        vec = np.array([float(x) for x in lines[i].split()]) * scale
+        lengths.append(np.linalg.norm(vec))
+    return lengths
+
+
 def read_species_from_poscar(poscar_path):
     """Read species list and counts from POSCAR/CONTCAR."""
     with open(poscar_path, 'r') as f:
@@ -167,7 +205,7 @@ def read_species_from_poscar(poscar_path):
 
 
 def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
-                   custom_overrides=None):
+                   custom_overrides=None, lattice_lengths=None):
     """
     Generate a complete INCAR dict for a given calculation type.
 
@@ -177,6 +215,7 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
         calc_type: 'bulk_relax', 'slab_relax', 'ads_prerelax', 'ads_refine', 'static'
         bandgap: bandgap in eV (None = unknown, assume metallic)
         custom_overrides: dict of additional INCAR parameters
+        lattice_lengths: (a, b, c) in Angstrom for dynamic KPAR estimation
 
     Returns:
         dict of INCAR parameters
@@ -188,10 +227,16 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
     lmaxmix = get_lmaxmix(species)
     magmom = get_magmom_string(species, counts)
     kspacing = get_kspacing(bandgap)
+    effective_kspacing = max(kspacing, 0.25)
+
+    # Dynamic KPAR: must be <= total k-points
+    kpar = 4
+    if lattice_lengths is not None:
+        kpar = get_kpar(lattice_lengths, effective_kspacing, max_kpar=4)
 
     # Base settings (common to all)
     params = {
-        'ALGO': 'Normal',
+        'ALGO': 'Fast',
         'EDIFF': 1e-4,
         'ENCUT': 520,
         'PREC': 'Normal',
@@ -205,8 +250,8 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
         'LMAXMIX': lmaxmix,
         'LMIXTAU': True,
         'MAGMOM': magmom,
-        'KSPACING': max(kspacing, 0.25),
-        'KPAR': 4,
+        'KSPACING': effective_kspacing,
+        'KPAR': kpar,
         'NCORE': 16,
         'LWAVE': False,
         'LCHARG': False,
@@ -232,10 +277,9 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
             'EDIFFG': -0.05,
             'LDIPOL': True,
             'IDIPOL': 3,
-            # Prevent charge sloshing along vacuum direction
             'AMIN': 0.01,
-            'AMIX': 0.1,
-            'BMIX': 0.0001,
+            'AMIX': 0.2,
+            'BMIX': 0.001,
         })
 
     elif calc_type in ('ads_prerelax', 'ads_relax'):
@@ -247,8 +291,8 @@ def generate_incar(species, counts, calc_type='bulk_relax', bandgap=None,
             'LDIPOL': True,
             'IDIPOL': 3,
             'AMIN': 0.01,
-            'AMIX': 0.1,
-            'BMIX': 0.0001,
+            'AMIX': 0.2,
+            'BMIX': 0.001,
         })
 
     elif calc_type == 'static':

@@ -25,7 +25,9 @@ import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
+from utils.incar_generator import (
+    generate_incar, write_incar, read_species_from_poscar, read_lattice_from_poscar
+)
 from utils.job_manager import submit_job, check_vasp_converged, parse_energy
 
 
@@ -313,7 +315,9 @@ def setup_slab_calculations(bulk_dir, work_dir, vacuum=20.0, thickness=20.0,
             add_selective_dynamics(poscar, relax_fraction)
 
             species, counts = read_species_from_poscar(poscar)
-            params = generate_incar(species, counts, calc_type='slab_relax')
+            lattice = read_lattice_from_poscar(poscar)
+            params = generate_incar(species, counts, calc_type='slab_relax',
+                                    lattice_lengths=lattice)
             write_incar(params, os.path.join(slab_dir, 'INCAR'))
 
             # Generate POTCAR via vaspkit

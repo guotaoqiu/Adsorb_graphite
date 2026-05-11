@@ -26,7 +26,9 @@ import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
+from utils.incar_generator import (
+    generate_incar, write_incar, read_species_from_poscar, read_lattice_from_poscar
+)
 from utils.job_manager import submit_job, check_vasp_converged, parse_energy
 
 
@@ -278,7 +280,9 @@ def setup_adsorption(slab_dir, work_dir, height=2.5, relax_fraction=0.25):
                 # Generate INCAR (prerelax phase)
                 species, counts = read_species_from_poscar(
                     os.path.join(ads_dir, 'POSCAR'))
-                params = generate_incar(species, counts, calc_type='ads_relax')
+                lattice = read_lattice_from_poscar(os.path.join(ads_dir, 'POSCAR'))
+                params = generate_incar(species, counts, calc_type='ads_relax',
+                                        lattice_lengths=lattice)
                 write_incar(params, os.path.join(ads_dir, 'INCAR'))
 
                 # Generate POTCAR via vaspkit (reads POSCAR, handles new species like C)

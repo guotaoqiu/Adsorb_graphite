@@ -25,7 +25,9 @@ import argparse
 import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utils.incar_generator import generate_incar, write_incar, read_species_from_poscar
+from utils.incar_generator import (
+    generate_incar, write_incar, read_species_from_poscar, read_lattice_from_poscar
+)
 from utils.job_manager import (
     submit_job, scan_status, check_vasp_converged, parse_energy
 )
@@ -109,7 +111,9 @@ def setup_bulk_calculations(input_dir, work_dir, partition='cu', ntasks=64):
             continue
 
         # Generate INCAR
-        params = generate_incar(species, counts, calc_type='bulk_relax')
+        lattice = read_lattice_from_poscar(os.path.join(calc_dir, 'POSCAR'))
+        params = generate_incar(species, counts, calc_type='bulk_relax',
+                                lattice_lengths=lattice)
         write_incar(params, os.path.join(calc_dir, 'INCAR'))
 
         # Generate POTCAR via vaspkit
