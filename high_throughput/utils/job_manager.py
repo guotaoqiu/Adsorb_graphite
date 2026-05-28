@@ -145,7 +145,21 @@ def get_job_status(job_id):
 
 
 def check_vasp_converged(calc_dir):
-    """Check if VASP calculation converged."""
+    """Check if calculation converged (supports both VASP OUTCAR and MACE energy.json)."""
+    # Check MACE energy.json first
+    energy_json = os.path.join(calc_dir, 'energy.json')
+    if os.path.exists(energy_json):
+        with open(energy_json) as f:
+            info = json.load(f)
+        energy = info.get('energy_sigma0')
+        converged = info.get('converged', False)
+        if energy is not None:
+            if converged:
+                return True, f'Converged (E={energy:.6f}, MACE)'
+            else:
+                return False, f'Not converged (E={energy:.4f}, MACE fmax={info.get("forces_max", "?")})'
+
+    # Fall back to VASP OUTCAR
     outcar = os.path.join(calc_dir, 'OUTCAR')
     if not os.path.exists(outcar):
         return False, 'No OUTCAR'
@@ -169,15 +183,24 @@ def check_vasp_converged(calc_dir):
 
 
 def parse_energy(calc_dir):
-    """Parse final energy(sigma->0) from OUTCAR."""
+    """Parse final energy from energy.json (MACE) or OUTCAR (VASP)."""
+    # Check MACE first
+    energy_json = os.path.join(calc_dir, 'energy.json')
+    if os.path.exists(energy_json):
+        with open(energy_json) as f:
+            info = json.load(f)
+        return info.get('energy_sigma0')
+
+    # Fall back to VASP OUTCAR
     outcar = os.path.join(calc_dir, 'OUTCAR')
     energy = None
-    with open(outcar, 'r') as f:
-        for line in f:
-            if 'energy(sigma->0)' in line:
-                match = re.search(r'energy\(sigma->0\)\s*=\s*([-\d.]+)', line)
-                if match:
-                    energy = float(match.group(1))
+    if os.path.exists(outcar):
+        with open(outcar, 'r') as f:
+            for line in f:
+                if 'energy(sigma->0)' in line:
+                    match = re.search(r'energy\(sigma->0\)\s*=\s*([-\d.]+)', line)
+                    if match:
+                        energy = float(match.group(1))
     return energy
 
 
