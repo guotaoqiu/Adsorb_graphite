@@ -115,28 +115,33 @@ def write_fake_outcar(calc_dir, energy):
         f.write(" reached required accuracy - Loss function converged.\n")
 
 
-def relax_one(calc_dir, calc, mode='slab', fmax=0.05, max_steps=300,
-              optimizer_name='FIRE', interface_normal=2):
+def relax_one(input_dir, calc, mode='slab', fmax=0.05, max_steps=300,
+              optimizer_name='FIRE', interface_normal=2, output_dir=None):
     """
     Relax one structure using MACE.
 
     Args:
-        calc_dir: directory containing POSCAR
+        input_dir: directory containing POSCAR
         calc: MACE calculator (shared across calls)
         mode: 'slab' (relax c-axis) or 'ads' (fixed cell)
         fmax: force convergence in eV/Ang
         max_steps: maximum optimization steps
         optimizer_name: 'FIRE', 'BFGS', or 'LBFGS'
         interface_normal: axis index for slab normal (0=x, 1=y, 2=z)
+        output_dir: where to write results (default: same as input_dir)
 
     Returns:
         dict with results
     """
     from ase.optimize import BFGS, FIRE, LBFGS
 
-    poscar_path = os.path.join(calc_dir, 'POSCAR')
+    if output_dir is None:
+        output_dir = input_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    poscar_path = os.path.join(input_dir, 'POSCAR')
     if not os.path.exists(poscar_path):
-        raise FileNotFoundError(f"No POSCAR in {calc_dir}")
+        raise FileNotFoundError(f"No POSCAR in {input_dir}")
 
     atoms = read_poscar_with_constraints(poscar_path)
     atoms.calc = calc
@@ -176,12 +181,22 @@ def relax_one(calc_dir, calc, mode='slab', fmax=0.05, max_steps=300,
     max_force = float(np.max(np.linalg.norm(forces, axis=1)))
 
     # Write outputs
-    write_contcar(atoms, os.path.join(calc_dir, 'CONTCAR'))
-    write_energy_json(calc_dir, ef, max_force, bool(converged), opt.nsteps, elapsed)
-    write_fake_outcar(calc_dir, ef)
+    write_contcar(atoms, os.path.join(output_dir, 'CONTCAR'))
+    write_energy_json(output_dir, ef, max_force, bool(converged), opt.nsteps, elapsed)
+    write_fake_outcar(output_dir, ef)
+
+    # Also copy POSCAR to output for reference
+    if output_dir != input_dir:
+        import shutil
+        shutil.copy2(poscar_path, os.path.join(output_dir, 'POSCAR'))
+        # Copy surface_info.log if exists (needed for step3)
+        info_log = os.path.join(input_dir, 'surface_info.log')
+        if os.path.exists(info_log):
+            shutil.copy2(info_log, os.path.join(output_dir, 'surface_info.log'))
 
     return {
-        'directory': calc_dir,
+        'directory': output_dir,
+        'input_dir': input_dir,
         'converged': bool(converged),
         'e0': float(e0),
         'ef': float(ef),
@@ -254,6 +269,13 @@ def main():
                         help="GPU ID to use (default: auto)")
     parser.add_argument('--skip_converged', action='store_true', default=True,
                         help="Skip directories that already have CONTCAR + energy.json")
+    parser.add_argument('--output_root', default=None,
+                        help="Output root directory. If set, results are written to a "
+                             "mirrored path under this root instead of in the source dir. "
+                             "E.g., --output_root ./2_slabs_mace mirrors ./2_slabs structure.")
+    parser.add_argument('--source_root', default=None,
+                        help="Source root to strip when computing mirror path. "
+                             "Used with --output_root. E.g., --source_root ./2_slabs")
 
     args = parser.parse_args()
 
@@ -273,33 +295,49 @@ def main():
     else:
         parser.error("Specify --calc_dir or --batch")
 
-    # Filter already-done
+    # Build input→output directory mapping
+    dir_pairs = []  # list of (input_dir, output_dir)
+    for d in calc_dirs:
+        if args.output_root and args.source_root:
+            # Mirror the relative path under output_root
+            rel = os.path.relpath(d, args.source_root)
+            out_dir = os.path.join(args.output_root, rel)
+        elif args.output_root:
+            # Use basename under output_root
+            out_dir = os.path.join(args.output_root, os.path.basename(d))
+        else:
+            out_dir = d
+        dir_pairs.append((d, out_dir))
+
+    # Filter already-done (check output dir)
     if args.skip_converged:
         todo = []
-        for d in calc_dirs:
-            energy_json = os.path.join(d, 'energy.json')
+        for inp, out in dir_pairs:
+            energy_json = os.path.join(out, 'energy.json')
             if os.path.exists(energy_json):
                 with open(energy_json) as f:
                     info = json.load(f)
                 if info.get('converged', False):
                     continue
-            todo.append(d)
-        skipped = len(calc_dirs) - len(todo)
+            todo.append((inp, out))
+        skipped = len(dir_pairs) - len(todo)
         if skipped > 0:
             print(f"Skipping {skipped} already-converged directories")
-        calc_dirs = todo
+        dir_pairs = todo
 
-    if not calc_dirs:
+    if not dir_pairs:
         print("All directories already converged!")
         return
 
     print(f"{'=' * 70}")
     print(f"MACE-MP-0 Relaxation")
     print(f"{'=' * 70}")
-    print(f"  Directories: {len(calc_dirs)}")
+    print(f"  Directories: {len(dir_pairs)}")
     print(f"  Mode: {args.mode}")
     print(f"  fmax: {args.fmax} eV/Ang, max_steps: {args.max_steps}")
     print(f"  Optimizer: {args.optimizer}")
+    if args.output_root:
+        print(f"  Output root: {args.output_root}")
 
     # Initialize calculator once
     calc = init_calculator(
@@ -316,20 +354,21 @@ def main():
     n_fail = 0
     t_total = time.time()
 
-    for i, calc_dir in enumerate(calc_dirs):
-        dirname = os.path.basename(calc_dir)
-        parent = os.path.basename(os.path.dirname(calc_dir))
+    for i, (input_dir, output_dir) in enumerate(dir_pairs):
+        dirname = os.path.basename(input_dir)
+        parent = os.path.basename(os.path.dirname(input_dir))
         label = f"{parent}/{dirname}"
 
-        print(f"\n[{i+1}/{len(calc_dirs)}] {label}", flush=True)
+        print(f"\n[{i+1}/{len(dir_pairs)}] {label}", flush=True)
 
         try:
             result = relax_one(
-                calc_dir, calc,
+                input_dir, calc,
                 mode=args.mode,
                 fmax=args.fmax,
                 max_steps=args.max_steps,
                 optimizer_name=args.optimizer,
+                output_dir=output_dir,
             )
             icon = "OK" if result['converged'] else "!!"
             print(f"  {icon} steps={result['n_steps']} "
