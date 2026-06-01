@@ -133,13 +133,27 @@ def calculate_surface_energies(slab_dir, bulk_dir):
             print(f"    {slab_name:<25} γ = {gamma_jm2:>8.4f} J/m²")
 
         if surface_results:
-            surface_results.sort(key=lambda x: x['gamma_J_m2'])
-            best = surface_results[0]
+            # Filter out unphysical negative surface energies
+            physical = [s for s in surface_results if s['gamma_J_m2'] > 0]
+
+            if physical:
+                physical.sort(key=lambda x: x['gamma_J_m2'])
+                best = physical[0]
+            else:
+                # All surfaces have negative gamma — skip this compound
+                n_neg = len(surface_results)
+                print(f"    ⚠ All {n_neg} surfaces have negative γ — skipping compound")
+                continue
+
+            n_neg = len(surface_results) - len(physical)
+            if n_neg > 0:
+                print(f"    ⚠ Excluded {n_neg} surfaces with negative γ (unphysical)")
             print(f"    → Most stable: {best['name']} (γ = {best['gamma_J_m2']:.4f} J/m²)")
 
             results[compound] = {
                 'bulk_e_per_atom': bulk_e_per_atom,
-                'surfaces': surface_results,
+                'surfaces': physical,
+                'excluded_negative': n_neg,
                 'most_stable': best,
             }
 
