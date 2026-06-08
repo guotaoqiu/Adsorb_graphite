@@ -426,26 +426,92 @@ def calculate_adsorption_energies(work_dir):
                     best = typed[0]
                     print(f"    {atype:<12}: {best['config']:<30} E_ads = {best['e_adsorption']:.4f} eV")
 
-    # Save results
+    # Save results JSON
     output_path = os.path.join(work_dir, 'adsorption_energies.json')
     with open(output_path, 'w') as f:
         json.dump(all_results, f, indent=2)
 
-    # Summary table
-    print(f"\n{'=' * 90}")
-    print(f"SCREENING SUMMARY")
-    print(f"{'=' * 90}")
-    print(f"  {'Compound':<25}  {'Best C':<12}  {'Best C3':<12}  {'Best C6':<12}")
-    print("  " + "-" * 65)
+    # ─── Generate screening CSV ───
+    import csv
+
+    csv_path = os.path.join(work_dir, 'screening_results.csv')
+    csv_rows = []
+
     for compound, results in sorted(all_results.items()):
-        row = {'single_C': 'N/A', 'C_chain': 'N/A', 'C_ring': 'N/A'}
-        for atype in row:
+        # Find best E_ads per type
+        best = {}
+        best_config = {}
+        for atype in ['single_C', 'C_chain', 'C_ring']:
             typed = [r for r in results if r['adsorbate_type'] == atype]
             if typed:
-                row[atype] = f"{typed[0]['e_adsorption']:.3f} eV"
-        print(f"  {compound:<25}  {row['single_C']:<12}  {row['C_chain']:<12}  {row['C_ring']:<12}")
+                typed.sort(key=lambda x: x['e_adsorption'])
+                best[atype] = typed[0]['e_adsorption']
+                best_config[atype] = typed[0]['config']
+            else:
+                best[atype] = None
+                best_config[atype] = None
 
-    print(f"\nResults saved: {output_path}")
+        e_C = best.get('single_C')
+        e_C3 = best.get('C_chain')
+        e_C6 = best.get('C_ring')
+
+        # Energy differences
+        delta_C_C3 = (e_C3 - e_C) if (e_C is not None and e_C3 is not None) else None
+        delta_C3_C6 = (e_C6 - e_C3) if (e_C3 is not None and e_C6 is not None) else None
+
+        # Screening criterion: E_ads(C) > E_ads(C3) > E_ads(C6)
+        # i.e., C6 binds more strongly (more negative) than C3, which binds more than C
+        # This means the surface favors larger carbon clusters → graphitization tendency
+        favors_graphitization = False
+        if e_C is not None and e_C3 is not None and e_C6 is not None:
+            favors_graphitization = (e_C > e_C3 > e_C6)
+
+        csv_rows.append({
+            'compound': compound,
+            'E_ads_C (eV)': f"{e_C:.4f}" if e_C is not None else 'N/A',
+            'E_ads_C3 (eV)': f"{e_C3:.4f}" if e_C3 is not None else 'N/A',
+            'E_ads_C6 (eV)': f"{e_C6:.4f}" if e_C6 is not None else 'N/A',
+            'dE(C3-C) (eV)': f"{delta_C_C3:.4f}" if delta_C_C3 is not None else 'N/A',
+            'dE(C6-C3) (eV)': f"{delta_C3_C6:.4f}" if delta_C3_C6 is not None else 'N/A',
+            'favors_graphitization': favors_graphitization,
+            'best_C_config': best_config.get('single_C', ''),
+            'best_C3_config': best_config.get('C_chain', ''),
+            'best_C6_config': best_config.get('C_ring', ''),
+        })
+
+    # Write CSV
+    if csv_rows:
+        fieldnames = ['compound', 'E_ads_C (eV)', 'E_ads_C3 (eV)', 'E_ads_C6 (eV)',
+                      'dE(C3-C) (eV)', 'dE(C6-C3) (eV)', 'favors_graphitization',
+                      'best_C_config', 'best_C3_config', 'best_C6_config']
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+
+    # ─── Print screening summary ───
+    n_favors = sum(1 for r in csv_rows if r['favors_graphitization'])
+    n_total = len(csv_rows)
+
+    print(f"\n{'=' * 100}")
+    print(f"SCREENING SUMMARY")
+    print(f"{'=' * 100}")
+    print(f"  {'Compound':<25} {'E_C':>10} {'E_C3':>10} {'E_C6':>10} "
+          f"{'dE(C3-C)':>10} {'dE(C6-C3)':>10}  {'Graphitization?'}")
+    print("  " + "-" * 95)
+
+    for row in csv_rows:
+        marker = "  ✓ YES" if row['favors_graphitization'] else ""
+        print(f"  {row['compound']:<25} {row['E_ads_C (eV)']:>10} "
+              f"{row['E_ads_C3 (eV)']:>10} {row['E_ads_C6 (eV)']:>10} "
+              f"{row['dE(C3-C) (eV)']:>10} {row['dE(C6-C3) (eV)']:>10}  {marker}")
+
+    print(f"\n  Compounds favoring graphitization (E_C > E_C3 > E_C6): "
+          f"{n_favors}/{n_total}")
+    print(f"\n  Results saved:")
+    print(f"    JSON: {output_path}")
+    print(f"    CSV:  {csv_path}")
+
     return all_results
 
 
